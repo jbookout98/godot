@@ -1,0 +1,10 @@
+#!/usr/bin/env python
+from misc.utility.scons_hints import *
+
+Import("env")
+
+# Compile the copied backend and the voxel-specific source files in this folder.
+env.add_source_files(env.modules_sources, "*.cpp")
+
+# Keep all standard GodotPhysics3D joint implementations.
+SConscript("joints/SCsub")

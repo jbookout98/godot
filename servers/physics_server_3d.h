@@ -90,6 +90,7 @@ public:
 	virtual bool is_sleeping() const = 0;
 
 	virtual int get_contact_count() const = 0;
+	virtual Dictionary get_voxel_contact(int p_contact_idx) const;
 
 	virtual Vector3 get_contact_local_position(int p_contact_idx) const = 0;
 	virtual Vector3 get_contact_local_normal(int p_contact_idx) const = 0;

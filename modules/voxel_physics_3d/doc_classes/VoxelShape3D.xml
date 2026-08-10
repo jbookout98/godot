@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="VoxelShape3D" inherits="Shape3D" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+	<brief_description>
+		A voxel-aware 3D collision shape backed by [VoxelShapeData].
+	</brief_description>
+	<description>
+		Adapts a [VoxelShapeData] resource to the custom shape type implemented by the VoxelPhysics3D backend. Assign this resource to a [CollisionShape3D]. Changes to the shared voxel data are forwarded to the physics server automatically.
+		Voxel [code](0, 0, 0)[/code] begins at the collision node's origin. The full bounds extend from zero to [member VoxelShapeData.dimensions] multiplied by [member VoxelShapeData.voxel_size]. Editor debug geometry shows these bounds rather than drawing every occupied voxel.
+		[b]Note:[/b] This shape requires an engine build with the [code]voxel_physics_3d[/code] module and the VoxelPhysics3D backend.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="get_voxel_data" qualifiers="const">
+			<return type="VoxelShapeData" />
+			<description>
+				Returns the voxel resource used for collision.
+			</description>
+		</method>
+		<method name="set_voxel_data">
+			<return type="void" />
+			<param index="0" name="voxel_data" type="VoxelShapeData" />
+			<description>
+				Assigns the voxel resource and updates the physics-server shape. Later changes to the resource also update the shape.
+			</description>
+		</method>
+	</methods>
+	<members>
+		<member name="voxel_data" type="VoxelShapeData" setter="set_voxel_data" getter="get_voxel_data">
+			The occupancy, dimensions, voxel scale, and optional feature proxies used by this collision shape.
+		</member>
+	</members>
+</class>

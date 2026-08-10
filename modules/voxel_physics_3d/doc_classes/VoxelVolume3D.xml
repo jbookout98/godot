@@ -1,0 +1,185 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="VoxelVolume3D" inherits="GeometryInstance3D" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+	<brief_description>
+		Renders a sparse, editable 3D voxel volume.
+	</brief_description>
+	<description>
+		Displays [member voxel_data] by ray marching sparse 8 × 8 × 8 bricks inside a procedural box proxy. Palette index [code]0[/code] is empty; indices [code]1..255[/code] are occupied and address the textures stored by [VoxelShapeData].
+		The node origin is the minimum corner of voxel [code](0, 0, 0)[/code]. The local bounds are [member VoxelShapeData.dimensions] multiplied by [member VoxelShapeData.voxel_size]. Use the coordinate conversion methods instead of duplicating this calculation when the node may be transformed.
+		The assigned [VoxelMaterial] stores authored settings. The node creates a private runtime material and GPU textures, so multiple volumes can safely share the same authored material.
+		For collision, assign the same [VoxelShapeData] to a [VoxelShape3D] used by a [CollisionShape3D].
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="apply_voxel_edits">
+			<return type="int" />
+			<param index="0" name="positions" type="Array" />
+			<param index="1" name="palette_indices" type="PackedByteArray" />
+			<description>
+				Applies a batch of coordinate-based edits to [member voxel_data] and returns the number of cells that changed. Both arrays must have the same length. Invalid coordinates are skipped.
+			</description>
+		</method>
+		<method name="apply_voxel_edits_by_index">
+			<return type="int" />
+			<param index="0" name="indices" type="PackedInt32Array" />
+			<param index="1" name="palette_indices" type="PackedByteArray" />
+			<description>
+				Applies edits using X-major linear voxel indices and returns the number of cells that changed. Both arrays must have the same length. Invalid indices are skipped.
+			</description>
+		</method>
+		<method name="fill_voxel_region">
+			<return type="int" />
+			<param index="0" name="position" type="Vector3i" />
+			<param index="1" name="size" type="Vector3i" />
+			<param index="2" name="palette_index" type="int" />
+			<description>
+				Fills the axis-aligned region in [member voxel_data], clipped to its dimensions, and returns the number of cells that changed. Palette index [code]0[/code] clears cells.
+			</description>
+		</method>
+		<method name="get_streaming_distance" qualifiers="const">
+			<return type="float" />
+			<description>
+				Returns this volume's automatic-streaming distance override.
+			</description>
+		</method>
+		<method name="get_streaming_mode" qualifiers="const">
+			<return type="int" enum="VoxelVolume3D.StreamingMode" />
+			<description>
+				Returns the residency policy used by the streaming manager.
+			</description>
+		</method>
+		<method name="get_voxel" qualifiers="const">
+			<return type="int" />
+			<param index="0" name="position" type="Vector3i" />
+			<description>
+				Returns the palette index at [param position], or [code]0[/code] when no voxel resource is assigned or the position is outside its bounds.
+			</description>
+		</method>
+		<method name="get_voxel_data" qualifiers="const">
+			<return type="VoxelShapeData" />
+			<description>
+				Returns the voxel resource rendered by this node.
+			</description>
+		</method>
+		<method name="get_voxel_material" qualifiers="const">
+			<return type="VoxelMaterial" />
+			<description>
+				Returns the lightweight authored material configuration.
+			</description>
+		</method>
+		<method name="is_streaming_resident" qualifiers="const">
+			<return type="bool" />
+			<description>
+				Returns whether this volume currently owns its GPU brick textures and render proxy.
+			</description>
+		</method>
+		<method name="local_to_voxel" qualifiers="const">
+			<return type="Vector3i" />
+			<param index="0" name="local_position" type="Vector3" />
+			<description>
+				Converts a local-space point to a voxel coordinate by dividing by voxel size and flooring each component. The result is not clamped.
+			</description>
+		</method>
+		<method name="make_voxel_data_unique">
+			<return type="void" />
+			<description>
+				Deep-duplicates [member voxel_data] and assigns the duplicate to this node. Use before editing when the original resource is shared but this volume should diverge.
+			</description>
+		</method>
+		<method name="set_streaming_distance">
+			<return type="void" />
+			<param index="0" name="distance" type="float" />
+			<description>
+				Sets the non-negative camera-distance override. Zero uses the global [code]rendering/voxel_volume/streaming_distance[/code] setting.
+			</description>
+		</method>
+		<method name="set_streaming_mode">
+			<return type="void" />
+			<param index="0" name="mode" type="int" enum="VoxelVolume3D.StreamingMode" />
+			<description>
+				Selects automatic, always-resident, or manual residency control.
+			</description>
+		</method>
+		<method name="set_streaming_resident">
+			<return type="void" />
+			<param index="0" name="resident" type="bool" />
+			<description>
+				Loads or releases this volume's GPU resources. Always-resident mode forces this to [code]true[/code]. CPU voxel data is retained when nonresident.
+			</description>
+		</method>
+		<method name="set_voxel">
+			<return type="bool" />
+			<param index="0" name="position" type="Vector3i" />
+			<param index="1" name="palette_index" type="int" />
+			<description>
+				Writes one cell in [member voxel_data]. Returns [code]true[/code] only when the stored value changes. The palette index must be in [code]0..255[/code].
+			</description>
+		</method>
+		<method name="set_voxel_data">
+			<return type="void" />
+			<param index="0" name="data" type="VoxelShapeData" />
+			<description>
+				Assigns the voxel resource, connects its change notifications, and rebuilds resident GPU textures.
+			</description>
+		</method>
+		<method name="set_voxel_material">
+			<return type="void" />
+			<param index="0" name="material" type="VoxelMaterial" />
+			<description>
+				Copies the material's authored shading settings and rebuilds this volume's private runtime material.
+			</description>
+		</method>
+		<method name="voxel_to_local" qualifiers="const">
+			<return type="Vector3" />
+			<param index="0" name="voxel" type="Vector3i" />
+			<param index="1" name="center" type="bool" default="true" />
+			<description>
+				Returns the local-space center of [param voxel], or its minimum corner when [param center] is [code]false[/code].
+			</description>
+		</method>
+		<method name="voxel_to_world" qualifiers="const">
+			<return type="Vector3" />
+			<param index="0" name="voxel" type="Vector3i" />
+			<param index="1" name="center" type="bool" default="true" />
+			<description>
+				Returns the transformed world-space center of [param voxel], or its minimum corner when [param center] is [code]false[/code].
+			</description>
+		</method>
+		<method name="world_to_voxel" qualifiers="const">
+			<return type="Vector3i" />
+			<param index="0" name="world_position" type="Vector3" />
+			<description>
+				Transforms a world-space point into the volume's local space and converts it to a voxel coordinate. The result is not clamped.
+			</description>
+		</method>
+	</methods>
+	<members>
+		<member name="streaming_distance" type="float" setter="set_streaming_distance" getter="get_streaming_distance" default="0.0">
+			Automatic-streaming distance override in world units. Zero uses the global project setting.
+		</member>
+		<member name="streaming_mode" type="int" setter="set_streaming_mode" getter="get_streaming_mode" enum="VoxelVolume3D.StreamingMode" default="0">
+			The policy controlling GPU residency.
+		</member>
+		<member name="streaming_resident" type="bool" setter="set_streaming_resident" getter="is_streaming_resident" default="false">
+			Whether GPU textures and render geometry are currently resident.
+		</member>
+		<member name="voxel_data" type="VoxelShapeData" setter="set_voxel_data" getter="get_voxel_data">
+			The sparse voxel resource rendered by this node.
+		</member>
+		<member name="voxel_material" type="VoxelMaterial" setter="set_voxel_material" getter="get_voxel_material">
+			Authored shading configuration copied into this volume's private runtime material.
+		</member>
+	</members>
+	<constants>
+		<constant name="STREAMING_AUTOMATIC" value="0" enum="StreamingMode">
+			The manager evaluates camera distance and the global resident-volume budget every 12 process frames.
+		</constant>
+		<constant name="STREAMING_ALWAYS_RESIDENT" value="1" enum="StreamingMode">
+			Keeps rendering resources resident regardless of camera distance or budget.
+		</constant>
+		<constant name="STREAMING_MANUAL" value="2" enum="StreamingMode">
+			Leaves [member streaming_resident] under application control.
+		</constant>
+	</constants>
+</class>

@@ -1,0 +1,112 @@
+#pragma once
+
+#include "scene/3d/visual_instance_3d.h"
+#include "scene/resources/image_texture.h"
+#include "voxel_material.h"
+#include "voxel_shape_data.h"
+
+class VoxelVolume3D : public GeometryInstance3D {
+	GDCLASS(VoxelVolume3D, GeometryInstance3D);
+
+public:
+	enum StreamingMode {
+		STREAMING_AUTOMATIC,
+		STREAMING_ALWAYS_RESIDENT,
+		STREAMING_MANUAL,
+	};
+
+	enum NeighborFace {
+		NEIGHBOR_NEGATIVE_X,
+		NEIGHBOR_POSITIVE_X,
+		NEIGHBOR_NEGATIVE_Y,
+		NEIGHBOR_POSITIVE_Y,
+		NEIGHBOR_NEGATIVE_Z,
+		NEIGHBOR_POSITIVE_Z,
+		NEIGHBOR_FACE_COUNT,
+	};
+
+private:
+
+	RID procedural_surface;
+	Ref<VoxelShapeData> voxel_data;
+	// Inspector-facing, serializable configuration only.
+	Ref<VoxelMaterial> voxel_material;
+	// Private generated material holding Shader and per-volume GPU textures.
+	Ref<VoxelMaterial> runtime_material;
+	// Mixed bricks are tightly packed into this atlas. Empty and uniform bricks
+	// never allocate voxel payload on the GPU.
+	Ref<ImageTexture3D> mixed_brick_atlas;
+	Ref<ImageTexture3D> brick_directory_texture;
+	// Six 2D boundary slices packed as a shallow 3D texture. They contain only
+	// neighbor occupancy and are rebuilt when adjacency or voxel revisions change.
+	Ref<ImageTexture3D> neighbor_face_texture;
+	Ref<ImageTexture3D> fallback_neighbor_face_texture;
+	ObjectID neighbor_ids[NEIGHBOR_FACE_COUNT];
+	uint64_t neighbor_revisions[NEIGHBOR_FACE_COUNT] = {
+		UINT64_MAX, UINT64_MAX, UINT64_MAX, UINT64_MAX, UINT64_MAX, UINT64_MAX
+	};
+	uint64_t neighbor_self_revision = UINT64_MAX;
+	Vector3i neighbor_self_dimensions;
+	int neighbor_mask = 0;
+	Vector3i atlas_brick_dimensions = Vector3i(1, 1, 1);
+	uint64_t rendered_revision = UINT64_MAX;
+	StreamingMode streaming_mode = STREAMING_AUTOMATIC;
+	real_t streaming_distance = 0.0;
+	// Automatic volumes start without GPU resources. The streaming manager
+	// selects the initial resident set after the complete scene and camera have
+	// entered the tree, avoiding load-time uploads that are immediately freed.
+	bool streaming_resident = false;
+	Ref<Texture2D> fallback_palette;
+	Ref<Texture2D> fallback_material;
+	AABB local_aabb;
+
+	void _voxel_data_changed();
+	void _voxel_data_voxels_changed(const Vector3i &p_position, const Vector3i &p_size, int64_t p_revision);
+	void _voxel_material_changed();
+	void _rebuild_volume_textures();
+	void _rebuild_runtime_material();
+	void _rebuild_procedural_surface();
+	void _update_material_bindings();
+	Ref<ImageTexture3D> _create_texture_3d(
+			const PackedByteArray &p_bytes,
+			const Vector3i &p_dimensions,
+			Image::Format p_format,
+			int p_bytes_per_pixel) const;
+	void _ensure_fallback_textures();
+
+protected:
+	static void _bind_methods();
+	void _notification(int p_what);
+
+public:
+	void set_voxel_data(const Ref<VoxelShapeData> &p_data);
+	Ref<VoxelShapeData> get_voxel_data() const;
+	void set_voxel_material(const Ref<VoxelMaterial> &p_material);
+	Ref<VoxelMaterial> get_voxel_material() const;
+
+	int get_voxel(const Vector3i &p_position) const;
+	bool set_voxel(const Vector3i &p_position, int p_palette_index);
+	int apply_voxel_edits(const Array &p_positions, const PackedByteArray &p_palette_indices);
+	int apply_voxel_edits_by_index(const PackedInt32Array &p_indices, const PackedByteArray &p_palette_indices);
+	int fill_voxel_region(const Vector3i &p_position, const Vector3i &p_size, int p_palette_index);
+	Vector3i local_to_voxel(const Vector3 &p_local_position) const;
+	Vector3i world_to_voxel(const Vector3 &p_world_position) const;
+	Vector3 voxel_to_local(const Vector3i &p_voxel, bool p_center = true) const;
+	Vector3 voxel_to_world(const Vector3i &p_voxel, bool p_center = true) const;
+	void make_voxel_data_unique();
+	void set_streaming_mode(StreamingMode p_mode);
+	StreamingMode get_streaming_mode() const;
+	void set_streaming_distance(real_t p_distance);
+	real_t get_streaming_distance() const;
+	void set_streaming_resident(bool p_resident);
+	bool is_streaming_resident() const;
+	// Internal renderer service used by VoxelVolumeStreamingManager.
+	void update_neighbor_faces(VoxelVolume3D *const p_neighbors[NEIGHBOR_FACE_COUNT]);
+
+	AABB get_aabb() const override;
+
+	VoxelVolume3D();
+	~VoxelVolume3D();
+};
+
+VARIANT_ENUM_CAST(VoxelVolume3D::StreamingMode);

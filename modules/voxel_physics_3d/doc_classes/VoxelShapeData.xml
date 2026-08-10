@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="VoxelShapeData" inherits="Resource" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+	<brief_description>
+		Sparse voxel occupancy, palette, rendering, and collision-feature data.
+	</brief_description>
+	<description>
+		Stores an editable 3D grid as sparse 8 × 8 × 8 bricks. Palette index [code]0[/code] is empty and indices [code]1..255[/code] are solid. The resource can be shared by [VoxelVolume3D] rendering and [VoxelShape3D] collision.
+		Coordinates are zero-based. Linear indices use [code]x + y * dimensions.x + z * dimensions.x * dimensions.y[/code]. Editing methods emit [signal voxels_changed] and increment the revision when a transaction is flushed.
+		Surface feature classes and six-bit exposure masks are derived from occupied neighbors. Mask bits represent [code]+X, -X, +Y, -Y, +Z, -Z[/code] in that order.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="apply_voxel_edits">
+			<return type="int" />
+			<param index="0" name="positions" type="Array" />
+			<param index="1" name="palette_indices" type="PackedByteArray" />
+			<description>Applies coordinate/value pairs as one edit transaction and returns the number of changed cells. Array lengths must match; invalid coordinates are skipped.</description>
+		</method>
+		<method name="apply_voxel_edits_by_index">
+			<return type="int" />
+			<param index="0" name="indices" type="PackedInt32Array" />
+			<param index="1" name="palette_indices" type="PackedByteArray" />
+			<description>Applies X-major linear index/value pairs as one transaction and returns the number of changed cells. Array lengths must match; invalid indices are skipped.</description>
+		</method>
+		<method name="begin_edit">
+			<return type="void" />
+			<description>Begins or nests an edit transaction. Notifications are deferred until the matching outermost [method end_edit].</description>
+		</method>
+		<method name="end_edit">
+			<return type="void" />
+			<description>Ends one edit-transaction level. The outermost call increments the revision and emits one combined dirty region if any cells changed.</description>
+		</method>
+		<method name="fill_voxel_region">
+			<return type="int" />
+			<param index="0" name="position" type="Vector3i" />
+			<param index="1" name="size" type="Vector3i" />
+			<param index="2" name="palette_index" type="int" />
+			<description>Fills an axis-aligned region, clipped to [member dimensions], and returns the number of changed cells. Negative size components are invalid.</description>
+		</method>
+		<method name="get_corner_mask" qualifiers="const">
+			<return type="int" />
+			<param index="0" name="position" type="Vector3i" />
+			<description>Returns the six-bit exposure mask when the cell is classified as a corner, otherwise [code]0[/code].</description>
+		</method>
+		<method name="get_corner_masks" qualifiers="const"><return type="PackedByteArray" /><description>Materializes a dense exposure-mask array for corner cells. This is a compatibility operation and allocates one byte per voxel.</description></method>
+		<method name="get_corner_shape" qualifiers="const"><return type="Shape3D" /><description>Returns the collision proxy used for corner features.</description></method>
+		<method name="get_corner_shape_scale" qualifiers="const"><return type="Vector3" /><description>Returns the per-axis scale applied to corner proxies.</description></method>
+		<method name="get_corner_voxels" qualifiers="const"><return type="PackedByteArray" /><description>Materializes a dense binary array whose corner cells contain [code]1[/code].</description></method>
+		<method name="get_dimensions" qualifiers="const"><return type="Vector3i" /><description>Returns the voxel grid dimensions.</description></method>
+		<method name="get_edge_mask" qualifiers="const"><return type="int" /><param index="0" name="position" type="Vector3i" /><description>Returns the six-bit exposure mask when the cell is classified as an edge, otherwise [code]0[/code].</description></method>
+		<method name="get_edge_masks" qualifiers="const"><return type="PackedByteArray" /><description>Materializes a dense exposure-mask array for edge cells.</description></method>
+		<method name="get_edge_shape" qualifiers="const"><return type="Shape3D" /><description>Returns the collision proxy used for edge features.</description></method>
+		<method name="get_edge_shape_scale" qualifiers="const"><return type="Vector3" /><description>Returns the per-axis scale applied to edge proxies.</description></method>
+		<method name="get_edge_voxels" qualifiers="const"><return type="PackedByteArray" /><description>Materializes a dense binary array whose edge cells contain [code]1[/code].</description></method>
+		<method name="get_face_mask" qualifiers="const"><return type="int" /><param index="0" name="position" type="Vector3i" /><description>Returns the six-bit exposure mask when the cell is classified as a face, otherwise [code]0[/code].</description></method>
+		<method name="get_face_masks" qualifiers="const"><return type="PackedByteArray" /><description>Materializes a dense exposure-mask array for face cells.</description></method>
+		<method name="get_face_shape" qualifiers="const"><return type="Shape3D" /><description>Returns the collision proxy used for face features.</description></method>
+		<method name="get_face_shape_scale" qualifiers="const"><return type="Vector3" /><description>Returns the per-axis scale applied to face proxies.</description></method>
+		<method name="get_face_voxels" qualifiers="const"><return type="PackedByteArray" /><description>Materializes a dense binary array whose face cells contain [code]1[/code].</description></method>
+		<method name="get_last_dirty_position" qualifiers="const"><return type="Vector3i" /><description>Returns the minimum coordinate of the most recently accumulated dirty region.</description></method>
+		<method name="get_last_dirty_size" qualifiers="const"><return type="Vector3i" /><description>Returns the size of the most recently accumulated dirty region.</description></method>
+		<method name="get_material_texture" qualifiers="const"><return type="Texture2D" /><description>Returns the 256-entry roughness, metallic, and emission lookup texture.</description></method>
+		<method name="get_metallic_texture" qualifiers="const"><return type="Texture2D" /><description>Returns the 256-entry inverted metallic lookup texture.</description></method>
+		<method name="get_transparency_texture" qualifiers="const"><return type="Texture2D" /><description>Returns the 256-entry inverted transparency lookup texture.</description></method>
+		<method name="get_specularity_texture" qualifiers="const"><return type="Texture2D" /><description>Returns the 256-entry inverted specularity lookup texture.</description></method>
+		<method name="get_emission_texture" qualifiers="const"><return type="Texture2D" /><description>Returns the 256-entry inverted emission lookup texture.</description></method>
+		<method name="get_palette_texture" qualifiers="const"><return type="Texture2D" /><description>Returns the 256-entry voxel color lookup texture.</description></method>
+		<method name="get_revision" qualifiers="const"><return type="int" /><description>Returns the monotonically increasing voxel edit revision.</description></method>
+		<method name="get_solid_voxels" qualifiers="const"><return type="PackedByteArray" /><description>Returns a dense binary occupancy array. This allocates one byte per voxel; prefer point queries or sparse serialization in performance-sensitive code.</description></method>
+		<method name="get_sparse_brick_data" qualifiers="const"><return type="PackedByteArray" /><description>Serializes the sparse 8³ brick representation.</description></method>
+		<method name="get_voxel" qualifiers="const"><return type="int" /><param index="0" name="position" type="Vector3i" /><description>Returns the palette index at [param position]. Out-of-range positions read as empty.</description></method>
+		<method name="get_voxel_data" qualifiers="const"><return type="PackedByteArray" /><description>Exports one palette byte per voxel in X-major order. This dense compatibility API may allocate a large array.</description></method>
+		<method name="get_voxel_index" qualifiers="const"><return type="int" /><param index="0" name="position" type="Vector3i" /><description>Returns the X-major linear index for a valid coordinate, or reports an error and returns [code]-1[/code] if outside the grid.</description></method>
+		<method name="get_voxel_size" qualifiers="const"><return type="float" /><description>Returns the edge length of one voxel in Godot units.</description></method>
+		<method name="is_corner" qualifiers="const"><return type="bool" /><param index="0" name="position" type="Vector3i" /><description>Returns [code]true[/code] when a solid cell has at least three exposed axis-aligned sides.</description></method>
+		<method name="is_edge" qualifiers="const"><return type="bool" /><param index="0" name="position" type="Vector3i" /><description>Returns [code]true[/code] when a solid cell has exactly two exposed axis-aligned sides.</description></method>
+		<method name="is_face" qualifiers="const"><return type="bool" /><param index="0" name="position" type="Vector3i" /><description>Returns [code]true[/code] when a solid cell has exactly one exposed axis-aligned side.</description></method>
+		<method name="is_inside" qualifiers="const"><return type="bool" /><param index="0" name="position" type="Vector3i" /><description>Returns whether every component of [param position] is at least zero and less than the corresponding [member dimensions] component.</description></method>
+		<method name="is_solid" qualifiers="const"><return type="bool" /><param index="0" name="position" type="Vector3i" /><description>Returns whether the palette index at [param position] is nonzero.</description></method>
+		<method name="set_corner_masks"><return type="void" /><param index="0" name="masks" type="PackedByteArray" /><description>Validates legacy dense corner-mask data. Topology is derived and this setter does not replace it.</description></method>
+		<method name="set_corner_shape"><return type="void" /><param index="0" name="shape" type="Shape3D" /><description>Sets the collision proxy used for derived corner features.</description></method>
+		<method name="set_corner_shape_scale"><return type="void" /><param index="0" name="scale" type="Vector3" /><description>Sets the positive per-axis scale applied to corner proxies.</description></method>
+		<method name="set_corner_voxels"><return type="void" /><param index="0" name="voxels" type="PackedByteArray" /><description>Validates legacy dense corner data. Derived topology is not replaced.</description></method>
+		<method name="set_dimensions"><return type="void" /><param index="0" name="dimensions" type="Vector3i" /><description>Sets positive grid dimensions. Changing dimensions clears all voxel contents and marks the complete new grid dirty.</description></method>
+		<method name="set_edge_masks"><return type="void" /><param index="0" name="masks" type="PackedByteArray" /><description>Validates legacy dense edge-mask data. Topology is derived and this setter does not replace it.</description></method>
+		<method name="set_edge_shape"><return type="void" /><param index="0" name="shape" type="Shape3D" /><description>Sets the collision proxy used for derived edge features.</description></method>
+		<method name="set_edge_shape_scale"><return type="void" /><param index="0" name="scale" type="Vector3" /><description>Sets the positive per-axis scale applied to edge proxies.</description></method>
+		<method name="set_edge_voxels"><return type="void" /><param index="0" name="voxels" type="PackedByteArray" /><description>Validates legacy dense edge data. Derived topology is not replaced.</description></method>
+		<method name="set_face_masks"><return type="void" /><param index="0" name="masks" type="PackedByteArray" /><description>Validates legacy dense face-mask data. Topology is derived and this setter does not replace it.</description></method>
+		<method name="set_face_shape"><return type="void" /><param index="0" name="shape" type="Shape3D" /><description>Sets the collision proxy used for derived face features.</description></method>
+		<method name="set_face_shape_scale"><return type="void" /><param index="0" name="scale" type="Vector3" /><description>Sets the positive per-axis scale applied to face proxies.</description></method>
+		<method name="set_face_voxels"><return type="void" /><param index="0" name="voxels" type="PackedByteArray" /><description>Validates legacy dense face data. Derived topology is not replaced.</description></method>
+		<method name="set_material_texture"><return type="void" /><param index="0" name="texture" type="Texture2D" /><description>Sets the 256-entry material lookup. Red is roughness, green is metallic, and blue is emission strength.</description></method>
+		<method name="set_metallic_texture"><return type="void" /><param index="0" name="texture" type="Texture2D" /><description>Sets the 256-entry metallic lookup. White is 0 and black is 1.</description></method>
+		<method name="set_transparency_texture"><return type="void" /><param index="0" name="texture" type="Texture2D" /><description>Sets the 256-entry transparency lookup. White is opaque (0) and black is fully transparent (1).</description></method>
+		<method name="set_specularity_texture"><return type="void" /><param index="0" name="texture" type="Texture2D" /><description>Sets the 256-entry specularity lookup. White is 0 and black is 1; roughness is the inverse of the resulting specularity.</description></method>
+		<method name="set_emission_texture"><return type="void" /><param index="0" name="texture" type="Texture2D" /><description>Sets the 256-entry emission lookup. White is 0 and black is 1.</description></method>
+		<method name="set_palette_texture"><return type="void" /><param index="0" name="texture" type="Texture2D" /><description>Sets the 256-entry color lookup texture addressed by voxel palette index.</description></method>
+		<method name="set_solid_voxels"><return type="void" /><param index="0" name="voxels" type="PackedByteArray" /><description>Imports dense binary occupancy while preserving existing nonzero palette values. New occupied cells receive palette index [code]1[/code].</description></method>
+		<method name="set_sparse_brick_data"><return type="void" /><param index="0" name="data" type="PackedByteArray" /><description>Deserializes sparse brick data for the current dimensions. An empty array clears the volume.</description></method>
+		<method name="set_voxel"><return type="bool" /><param index="0" name="position" type="Vector3i" /><param index="1" name="palette_index" type="int" /><description>Writes one palette index and returns [code]true[/code] if it changed. Coordinates must be valid and the value must be in [code]0..255[/code].</description></method>
+		<method name="set_voxel_data"><return type="void" /><param index="0" name="voxels" type="PackedByteArray" /><description>Imports exactly one palette byte per voxel in X-major order and rebuilds sparse storage.</description></method>
+		<method name="set_voxel_size"><return type="void" /><param index="0" name="voxel_size" type="float" /><description>Sets the positive edge length of each voxel and notifies rendering and collision listeners.</description></method>
+	</methods>
+	<members>
+		<member name="corner_masks" type="PackedByteArray" setter="set_corner_masks" getter="get_corner_masks">Legacy non-serialized dense corner exposure masks. Topology is derived on read.</member>
+		<member name="corner_shape" type="Shape3D" setter="set_corner_shape" getter="get_corner_shape">Optional physics proxy for derived corner features.</member>
+		<member name="corner_shape_scale" type="Vector3" setter="set_corner_shape_scale" getter="get_corner_shape_scale" default="Vector3(1, 1, 1)">Positive scale applied to corner proxies.</member>
+		<member name="corner_voxels" type="PackedByteArray" setter="set_corner_voxels" getter="get_corner_voxels">Legacy non-serialized dense corner classification.</member>
+		<member name="dimensions" type="Vector3i" setter="set_dimensions" getter="get_dimensions" default="Vector3i(1, 1, 1)">Positive voxel grid dimensions. Changing this clears existing contents.</member>
+		<member name="edge_masks" type="PackedByteArray" setter="set_edge_masks" getter="get_edge_masks">Legacy non-serialized dense edge exposure masks.</member>
+		<member name="edge_shape" type="Shape3D" setter="set_edge_shape" getter="get_edge_shape">Optional physics proxy for derived edge features.</member>
+		<member name="edge_shape_scale" type="Vector3" setter="set_edge_shape_scale" getter="get_edge_shape_scale" default="Vector3(1, 1, 1)">Positive scale applied to edge proxies.</member>
+		<member name="edge_voxels" type="PackedByteArray" setter="set_edge_voxels" getter="get_edge_voxels">Legacy non-serialized dense edge classification.</member>
+		<member name="face_masks" type="PackedByteArray" setter="set_face_masks" getter="get_face_masks">Legacy non-serialized dense face exposure masks.</member>
+		<member name="face_shape" type="Shape3D" setter="set_face_shape" getter="get_face_shape">Optional physics proxy for derived face features.</member>
+		<member name="face_shape_scale" type="Vector3" setter="set_face_shape_scale" getter="get_face_shape_scale" default="Vector3(1, 1, 1)">Positive scale applied to face proxies.</member>
+		<member name="face_voxels" type="PackedByteArray" setter="set_face_voxels" getter="get_face_voxels">Legacy non-serialized dense face classification.</member>
+		<member name="material_texture" type="Texture2D" setter="set_material_texture" getter="get_material_texture">Material lookup texture: roughness in red, metallic in green, emission strength in blue.</member>
+		<member name="metallic_texture" type="Texture2D" setter="set_metallic_texture" getter="get_metallic_texture">Palette-indexed metallic lookup with white mapped to 0 and black mapped to 1.</member>
+		<member name="transparency_texture" type="Texture2D" setter="set_transparency_texture" getter="get_transparency_texture">Palette-indexed transparency lookup with white mapped to opaque and black mapped to fully transparent.</member>
+		<member name="specularity_texture" type="Texture2D" setter="set_specularity_texture" getter="get_specularity_texture">Palette-indexed specularity lookup with white mapped to 0 and black mapped to 1. Roughness is its inverse.</member>
+		<member name="emission_texture" type="Texture2D" setter="set_emission_texture" getter="get_emission_texture">Palette-indexed emission lookup with white mapped to 0 and black mapped to 1.</member>
+		<member name="palette_texture" type="Texture2D" setter="set_palette_texture" getter="get_palette_texture">Color lookup texture addressed by the 8-bit voxel palette index.</member>
+		<member name="solid_voxels" type="PackedByteArray" setter="set_solid_voxels" getter="get_solid_voxels">Legacy non-serialized dense binary occupancy view.</member>
+		<member name="sparse_brick_data" type="PackedByteArray" setter="set_sparse_brick_data" getter="get_sparse_brick_data">Serialized sparse 8³ brick stream. This is the stored occupancy representation.</member>
+		<member name="voxel_data" type="PackedByteArray" setter="set_voxel_data" getter="get_voxel_data">Non-serialized dense palette-index compatibility view.</member>
+		<member name="voxel_size" type="float" setter="set_voxel_size" getter="get_voxel_size" default="0.1">Positive edge length of one voxel in Godot units.</member>
+	</members>
+	<signals>
+		<signal name="voxels_changed">
+			<param index="0" name="position" type="Vector3i" />
+			<param index="1" name="size" type="Vector3i" />
+			<param index="2" name="revision" type="int" />
+			<description>Emitted once when a voxel edit transaction is flushed. [param position] and [param size] describe the combined dirty region, and [param revision] is the new monotonically increasing revision.</description>
+		</signal>
+	</signals>
+</class>
