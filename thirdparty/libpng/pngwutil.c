@@ -1,6 +1,6 @@
 /* pngwutil.c - utilities to write a PNG file
  *
- * Copyright (c) 2018-2024 Cosmin Truta
+ * Copyright (c) 2018-2026 Cosmin Truta
  * Copyright (c) 1998-2002,2004,2006-2018 Glenn Randers-Pehrson
  * Copyright (c) 1996-1997 Andreas Dilger
  * Copyright (c) 1995-1996 Guy Eric Schalnat, Group 42, Inc.
@@ -485,10 +485,10 @@ png_free_buffer_list(png_structrp png_ptr, png_compression_bufferp *listp)
  */
 typedef struct
 {
-   png_const_bytep      input;        /* The uncompressed input data */
-   png_alloc_size_t     input_len;    /* Its length */
-   png_uint_32          output_len;   /* Final compressed length */
-   png_byte             output[1024]; /* First block of output */
+   png_const_bytep input;      /* The uncompressed input data */
+   png_alloc_size_t input_len; /* Its length */
+   png_uint_32 output_len;     /* Final compressed length */
+   png_byte output[1024];      /* First block of output */
 } compression_state;
 
 static void
@@ -898,7 +898,6 @@ png_write_PLTE(png_structrp png_ptr, png_const_colorp palette,
    png_debug1(3, "num_palette = %d", png_ptr->num_palette);
 
    png_write_chunk_header(png_ptr, png_PLTE, (png_uint_32)(num_pal * 3));
-#ifdef PNG_POINTER_INDEXING_SUPPORTED
 
    for (i = 0, pal_ptr = palette; i < num_pal; i++, pal_ptr++)
    {
@@ -908,21 +907,6 @@ png_write_PLTE(png_structrp png_ptr, png_const_colorp palette,
       png_write_chunk_data(png_ptr, buf, 3);
    }
 
-#else
-   /* This is a little slower but some buggy compilers need to do this
-    * instead
-    */
-   pal_ptr=palette;
-
-   for (i = 0; i < num_pal; i++)
-   {
-      buf[0] = pal_ptr[i].red;
-      buf[1] = pal_ptr[i].green;
-      buf[2] = pal_ptr[i].blue;
-      png_write_chunk_data(png_ptr, buf, 3);
-   }
-
-#endif
    png_write_chunk_end(png_ptr);
    png_ptr->mode |= PNG_HAVE_PLTE;
 }
@@ -1132,10 +1116,9 @@ png_write_sRGB(png_structrp png_ptr, int srgb_intent)
 /* Write an iCCP chunk */
 void /* PRIVATE */
 png_write_iCCP(png_structrp png_ptr, png_const_charp name,
-    png_const_bytep profile)
+    png_const_bytep profile, png_uint_32 profile_len)
 {
    png_uint_32 name_len;
-   png_uint_32 profile_len;
    png_byte new_name[81]; /* 1 byte for the compression byte */
    compression_state comp;
    png_uint_32 temp;
@@ -1148,10 +1131,11 @@ png_write_iCCP(png_structrp png_ptr, png_const_charp name,
    if (profile == NULL)
       png_error(png_ptr, "No profile for iCCP chunk"); /* internal error */
 
-   profile_len = png_get_uint_32(profile);
-
    if (profile_len < 132)
       png_error(png_ptr, "ICC profile too short");
+
+   if (png_get_uint_32(profile) != profile_len)
+      png_error(png_ptr, "Incorrect data in iCCP");
 
    temp = (png_uint_32) (*(profile+8));
    if (temp > 3 && (profile_len & 0x03))
@@ -1201,9 +1185,6 @@ png_write_sPLT(png_structrp png_ptr, png_const_sPLT_tp spalette)
    size_t entry_size = (spalette->depth == 8 ? 6 : 10);
    size_t palette_size = entry_size * (size_t)spalette->nentries;
    png_sPLT_entryp ep;
-#ifndef PNG_POINTER_INDEXING_SUPPORTED
-   int i;
-#endif
 
    png_debug(1, "in png_write_sPLT");
 
@@ -1221,7 +1202,6 @@ png_write_sPLT(png_structrp png_ptr, png_const_sPLT_tp spalette)
    png_write_chunk_data(png_ptr, &spalette->depth, 1);
 
    /* Loop through each palette entry, writing appropriately */
-#ifdef PNG_POINTER_INDEXING_SUPPORTED
    for (ep = spalette->entries; ep<spalette->entries + spalette->nentries; ep++)
    {
       if (spalette->depth == 8)
@@ -1244,31 +1224,6 @@ png_write_sPLT(png_structrp png_ptr, png_const_sPLT_tp spalette)
 
       png_write_chunk_data(png_ptr, entrybuf, entry_size);
    }
-#else
-   ep=spalette->entries;
-   for (i = 0; i>spalette->nentries; i++)
-   {
-      if (spalette->depth == 8)
-      {
-         entrybuf[0] = (png_byte)ep[i].red;
-         entrybuf[1] = (png_byte)ep[i].green;
-         entrybuf[2] = (png_byte)ep[i].blue;
-         entrybuf[3] = (png_byte)ep[i].alpha;
-         png_save_uint_16(entrybuf + 4, ep[i].frequency);
-      }
-
-      else
-      {
-         png_save_uint_16(entrybuf + 0, ep[i].red);
-         png_save_uint_16(entrybuf + 2, ep[i].green);
-         png_save_uint_16(entrybuf + 4, ep[i].blue);
-         png_save_uint_16(entrybuf + 6, ep[i].alpha);
-         png_save_uint_16(entrybuf + 8, ep[i].frequency);
-      }
-
-      png_write_chunk_data(png_ptr, entrybuf, entry_size);
-   }
-#endif
 
    png_write_chunk_end(png_ptr);
 }
@@ -1511,6 +1466,50 @@ png_write_cICP(png_structrp png_ptr,
 }
 #endif
 
+#ifdef PNG_WRITE_cLLI_SUPPORTED
+void /* PRIVATE */
+png_write_cLLI_fixed(png_structrp png_ptr, png_uint_32 maxCLL,
+   png_uint_32 maxFALL)
+{
+   png_byte buf[8];
+
+   png_debug(1, "in png_write_cLLI_fixed");
+
+   png_save_uint_32(buf, maxCLL);
+   png_save_uint_32(buf + 4, maxFALL);
+
+   png_write_complete_chunk(png_ptr, png_cLLI, buf, 8);
+}
+#endif
+
+#ifdef PNG_WRITE_mDCV_SUPPORTED
+void /* PRIVATE */
+png_write_mDCV_fixed(png_structrp png_ptr,
+   png_uint_16 red_x, png_uint_16 red_y,
+   png_uint_16 green_x, png_uint_16 green_y,
+   png_uint_16 blue_x, png_uint_16 blue_y,
+   png_uint_16 white_x, png_uint_16 white_y,
+   png_uint_32 maxDL, png_uint_32 minDL)
+{
+   png_byte buf[24];
+
+   png_debug(1, "in png_write_mDCV_fixed");
+
+   png_save_uint_16(buf +  0, red_x);
+   png_save_uint_16(buf +  2, red_y);
+   png_save_uint_16(buf +  4, green_x);
+   png_save_uint_16(buf +  6, green_y);
+   png_save_uint_16(buf +  8, blue_x);
+   png_save_uint_16(buf + 10, blue_y);
+   png_save_uint_16(buf + 12, white_x);
+   png_save_uint_16(buf + 14, white_y);
+   png_save_uint_32(buf + 16, maxDL);
+   png_save_uint_32(buf + 20, minDL);
+
+   png_write_complete_chunk(png_ptr, png_mDCV, buf, 24);
+}
+#endif
+
 #ifdef PNG_WRITE_eXIf_SUPPORTED
 /* Write the Exif data */
 void /* PRIVATE */
@@ -1694,7 +1693,7 @@ png_write_iTXt(png_structrp png_ptr, int compression, png_const_charp key,
    }
 
    new_key[++key_len] = PNG_COMPRESSION_TYPE_BASE;
-   ++key_len; /* for the keywod separator */
+   ++key_len; /* for the keyword separator */
 
    /* We leave it to the application to meet PNG-1.0 requirements on the
     * contents of the text.  PNG-1.0 through PNG-1.2 discourage the use of

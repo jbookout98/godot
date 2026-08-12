@@ -33,6 +33,11 @@
 #include "openxr_extension_wrapper.h"
 
 class OpenXRWMRControllerExtension : public OpenXRExtensionWrapper {
+	GDCLASS(OpenXRWMRControllerExtension, OpenXRExtensionWrapper);
+
+protected:
+	static void _bind_methods() {}
+
 public:
 	enum WMRControllers {
 		WMR_HPMR,
@@ -41,11 +46,11 @@ public:
 		WMR_MAX_CONTROLLERS
 	};
 
-	virtual HashMap<String, bool *> get_requested_extensions() override;
+	virtual HashMap<String, bool *> get_requested_extensions(XrVersion p_version) override;
 
 	bool is_available(WMRControllers p_type);
 
-	virtual void on_register_metadata() override;
+	virtual void on_register_metadata(OpenXRInteractionProfileMetadata *p_interaction_profile_metadata) override;
 
 private:
 	bool available[WMR_MAX_CONTROLLERS] = { false, false };

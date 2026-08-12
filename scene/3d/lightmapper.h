@@ -34,20 +34,10 @@
 
 class Image;
 
-#if !defined(__aligned)
-
-#if defined(_WIN32) && defined(_MSC_VER)
-#define __aligned(...) __declspec(align(__VA_ARGS__))
-#else
-#define __aligned(...) __attribute__((aligned(__VA_ARGS__)))
-#endif
-
-#endif
-
 class LightmapDenoiser : public RefCounted {
 	GDCLASS(LightmapDenoiser, RefCounted)
 protected:
-	static LightmapDenoiser *(*create_function)();
+	static Ref<LightmapDenoiser> (*create_function)();
 
 public:
 	virtual Ref<Image> denoise_image(const Ref<Image> &p_image) = 0;
@@ -57,11 +47,11 @@ public:
 class LightmapRaycaster : public RefCounted {
 	GDCLASS(LightmapRaycaster, RefCounted)
 protected:
-	static LightmapRaycaster *(*create_function)();
+	static Ref<LightmapRaycaster> (*create_function)();
 
 public:
 	// Compatible with embree4 rays.
-	struct __aligned(16) Ray {
+	struct alignas(16) Ray {
 		const static unsigned int INVALID_GEOMETRY_ID = ((unsigned int)-1); // from rtcore_common.h
 
 		/*! Default construction does nothing. */
@@ -73,7 +63,7 @@ public:
 		_FORCE_INLINE_ Ray(const Vector3 &p_org,
 				const Vector3 &p_dir,
 				float p_tnear = 0.0f,
-				float p_tfar = INFINITY) :
+				float p_tfar = Math::INF) :
 				org(p_org),
 				tnear(p_tnear),
 				dir(p_dir),
@@ -137,7 +127,8 @@ public:
 	enum LightType {
 		LIGHT_TYPE_DIRECTIONAL,
 		LIGHT_TYPE_OMNI,
-		LIGHT_TYPE_SPOT
+		LIGHT_TYPE_SPOT,
+		LIGHT_TYPE_AREA,
 	};
 
 	enum BakeError {
@@ -155,7 +146,7 @@ public:
 		BAKE_QUALITY_ULTRA,
 	};
 
-	typedef Lightmapper *(*CreateFunc)();
+	typedef Ref<Lightmapper> (*CreateFunc)();
 
 	static CreateFunc create_custom;
 	static CreateFunc create_gpu;
@@ -179,7 +170,9 @@ public:
 	virtual void add_mesh(const MeshData &p_mesh) = 0;
 	virtual void add_directional_light(const String &p_name, bool p_static, const Vector3 &p_direction, const Color &p_color, float p_energy, float p_indirect_energy, float p_angular_distance, float p_shadow_blur) = 0;
 	virtual void add_omni_light(const String &p_name, bool p_static, const Vector3 &p_position, const Color &p_color, float p_energy, float p_indirect_energy, float p_range, float p_attenuation, float p_size, float p_shadow_blur) = 0;
-	virtual void add_spot_light(const String &p_name, bool p_static, const Vector3 &p_position, const Vector3 p_direction, const Color &p_color, float p_energy, float p_indirect_energy, float p_range, float p_attenuation, float p_spot_angle, float p_spot_attenuation, float p_size, float p_shadow_blur) = 0;
+	virtual void add_spot_light(const String &p_name, bool p_static, const Vector3 &p_position, const Vector3 &p_direction, const Color &p_color, float p_energy, float p_indirect_energy, float p_range, float p_attenuation, float p_spot_angle, float p_spot_attenuation, float p_size, float p_shadow_blur) = 0;
+	virtual void add_area_light(const String &p_name, bool p_static, const Vector3 &p_position, const Vector3 &p_direction, const Color &p_color, float p_energy, float p_indirect_energy, float p_range, float p_attenuation, const Vector3 &p_area_width, const Vector3 &p_area_height, float p_size, float p_shadow_blur, const Rect2 &p_texture_rect, float p_max_mipmap) = 0;
+	virtual void add_area_light_atlas(const Vector2i &p_size, int p_mipmap_count, const PackedByteArray &p_atlas_data) = 0;
 	virtual void add_probe(const Vector3 &p_position) = 0;
 	virtual BakeError bake(BakeQuality p_quality, bool p_use_denoiser, float p_denoiser_strength, int p_denoiser_range, int p_bounces, float p_bounce_indirect_energy, float p_bias, int p_max_texture_size, bool p_bake_sh, bool p_bake_shadowmask, bool p_texture_for_bounces, GenerateProbes p_generate_probes, const Ref<Image> &p_environment_panorama, const Basis &p_environment_transform, BakeStepFunc p_step_function = nullptr, void *p_step_userdata = nullptr, float p_exposure_normalization = 1.0, float p_supersampling_factor = 1.0) = 0;
 

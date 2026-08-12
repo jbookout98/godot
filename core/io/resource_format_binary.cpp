@@ -34,8 +34,11 @@
 #include "core/io/dir_access.h"
 #include "core/io/file_access_compressed.h"
 #include "core/io/missing_resource.h"
+#include "core/object/class_db.h"
 #include "core/object/script_language.h"
 #include "core/version.h"
+#include "scene/property_utils.h"
+#include "scene/resources/packed_scene.h"
 
 //#define print_bl(m_what) print_line(m_what)
 #define print_bl(m_what) (void)(m_what)
@@ -112,14 +115,6 @@ static Error read_reals(real_t *dst, Ref<FileAccess> &f, size_t count) {
 		if constexpr (sizeof(real_t) == 8) {
 			// Ideal case with double-precision
 			f->get_buffer((uint8_t *)dst, count * sizeof(double));
-#ifdef BIG_ENDIAN_ENABLED
-			{
-				uint64_t *dst = (uint64_t *)dst;
-				for (size_t i = 0; i < count; i++) {
-					dst[i] = BSWAP64(dst[i]);
-				}
-			}
-#endif
 		} else if constexpr (sizeof(real_t) == 4) {
 			// May be slower, but this is for compatibility. Eventually the data should be converted.
 			for (size_t i = 0; i < count; ++i) {
@@ -132,14 +127,6 @@ static Error read_reals(real_t *dst, Ref<FileAccess> &f, size_t count) {
 		if constexpr (sizeof(real_t) == 4) {
 			// Ideal case with float-precision
 			f->get_buffer((uint8_t *)dst, count * sizeof(float));
-#ifdef BIG_ENDIAN_ENABLED
-			{
-				uint32_t *dst = (uint32_t *)dst;
-				for (size_t i = 0; i < count; i++) {
-					dst[i] = BSWAP32(dst[i]);
-				}
-			}
-#endif
 		} else if constexpr (sizeof(real_t) == 8) {
 			for (size_t i = 0; i < count; ++i) {
 				dst[i] = f->get_float();
@@ -162,9 +149,7 @@ StringName ResourceLoaderBinary::_get_string() {
 			return StringName();
 		}
 		f->get_buffer((uint8_t *)&str_buf[0], len);
-		String s;
-		s.parse_utf8(&str_buf[0], len);
-		return s;
+		return String::utf8(&str_buf[0], len);
 	}
 
 	return string_map[id];
@@ -525,15 +510,6 @@ Error ResourceLoaderBinary::parse_variant(Variant &r_v) {
 			array.resize(len);
 			int32_t *w = array.ptrw();
 			f->get_buffer((uint8_t *)w, len * sizeof(int32_t));
-#ifdef BIG_ENDIAN_ENABLED
-			{
-				uint32_t *ptr = (uint32_t *)w.ptr();
-				for (int i = 0; i < len; i++) {
-					ptr[i] = BSWAP32(ptr[i]);
-				}
-			}
-
-#endif
 
 			r_v = array;
 		} break;
@@ -544,15 +520,6 @@ Error ResourceLoaderBinary::parse_variant(Variant &r_v) {
 			array.resize(len);
 			int64_t *w = array.ptrw();
 			f->get_buffer((uint8_t *)w, len * sizeof(int64_t));
-#ifdef BIG_ENDIAN_ENABLED
-			{
-				uint64_t *ptr = (uint64_t *)w.ptr();
-				for (int i = 0; i < len; i++) {
-					ptr[i] = BSWAP64(ptr[i]);
-				}
-			}
-
-#endif
 
 			r_v = array;
 		} break;
@@ -563,15 +530,6 @@ Error ResourceLoaderBinary::parse_variant(Variant &r_v) {
 			array.resize(len);
 			float *w = array.ptrw();
 			f->get_buffer((uint8_t *)w, len * sizeof(float));
-#ifdef BIG_ENDIAN_ENABLED
-			{
-				uint32_t *ptr = (uint32_t *)w.ptr();
-				for (int i = 0; i < len; i++) {
-					ptr[i] = BSWAP32(ptr[i]);
-				}
-			}
-
-#endif
 
 			r_v = array;
 		} break;
@@ -582,15 +540,6 @@ Error ResourceLoaderBinary::parse_variant(Variant &r_v) {
 			array.resize(len);
 			double *w = array.ptrw();
 			f->get_buffer((uint8_t *)w, len * sizeof(double));
-#ifdef BIG_ENDIAN_ENABLED
-			{
-				uint64_t *ptr = (uint64_t *)w.ptr();
-				for (int i = 0; i < len; i++) {
-					ptr[i] = BSWAP64(ptr[i]);
-				}
-			}
-
-#endif
 
 			r_v = array;
 		} break;
@@ -641,15 +590,6 @@ Error ResourceLoaderBinary::parse_variant(Variant &r_v) {
 			// Colors always use `float` even with double-precision support enabled
 			static_assert(sizeof(Color) == 4 * sizeof(float));
 			f->get_buffer((uint8_t *)w, len * sizeof(float) * 4);
-#ifdef BIG_ENDIAN_ENABLED
-			{
-				uint32_t *ptr = (uint32_t *)w.ptr();
-				for (int i = 0; i < len * 4; i++) {
-					ptr[i] = BSWAP32(ptr[i]);
-				}
-			}
-
-#endif
 
 			r_v = array;
 		} break;
@@ -749,7 +689,7 @@ Error ResourceLoaderBinary::load() {
 		Ref<Resource> res;
 		Resource *r = nullptr;
 
-		MissingResource *missing_resource = nullptr;
+		Ref<MissingResource> missing_resource;
 
 		if (main) {
 			res = ResourceLoader::get_resource_ref_override(local_path);
@@ -775,7 +715,7 @@ Error ResourceLoaderBinary::load() {
 						missing_resource = memnew(MissingResource);
 						missing_resource->set_original_class(t);
 						missing_resource->set_recording_properties(true);
-						obj = missing_resource;
+						obj = missing_resource.ptr();
 					} else {
 						error = ERR_FILE_CORRUPT;
 						ERR_FAIL_V_MSG(ERR_FILE_CORRUPT, vformat("'%s': Resource of unrecognized type in file: '%s'.", local_path, t));
@@ -831,7 +771,7 @@ Error ResourceLoaderBinary::load() {
 			}
 
 			bool set_valid = true;
-			if (value.get_type() == Variant::OBJECT && missing_resource == nullptr && ResourceLoader::is_creating_missing_resources_if_class_unavailable_enabled()) {
+			if (value.get_type() == Variant::OBJECT && missing_resource.is_null() && ResourceLoader::is_creating_missing_resources_if_class_unavailable_enabled()) {
 				// If the property being set is a missing resource (and the parent is not),
 				// then setting it will most likely not work.
 				// Instead, save it as metadata.
@@ -873,7 +813,7 @@ Error ResourceLoaderBinary::load() {
 			}
 		}
 
-		if (missing_resource) {
+		if (missing_resource.is_valid()) {
 			missing_resource->set_recording_properties(false);
 		}
 
@@ -918,9 +858,7 @@ static String get_ustring(Ref<FileAccess> f) {
 	Vector<char> str_buf;
 	str_buf.resize(len);
 	f->get_buffer((uint8_t *)&str_buf[0], len);
-	String s;
-	s.parse_utf8(&str_buf[0], len);
-	return s;
+	return String::utf8(&str_buf[0], len);
 }
 
 String ResourceLoaderBinary::get_unicode_string() {
@@ -932,9 +870,7 @@ String ResourceLoaderBinary::get_unicode_string() {
 		return String();
 	}
 	f->get_buffer((uint8_t *)&str_buf[0], len);
-	String s;
-	s.parse_utf8(&str_buf[0], len);
-	return s;
+	return String::utf8(&str_buf[0], len);
 }
 
 void ResourceLoaderBinary::get_classes_used(Ref<FileAccess> p_f, HashSet<StringName> *p_classes) {
@@ -943,11 +879,10 @@ void ResourceLoaderBinary::get_classes_used(Ref<FileAccess> p_f, HashSet<StringN
 		return;
 	}
 
-	for (int i = 0; i < internal_resources.size(); i++) {
-		p_f->seek(internal_resources[i].offset);
+	for (const IntResource &res : internal_resources) {
+		p_f->seek(res.offset);
 		String t = get_unicode_string();
-		ERR_FAIL_COND(p_f->get_error() != OK);
-		if (t != String()) {
+		if (!p_f->get_error() && t != String() && ClassDB::class_exists(t)) {
 			p_classes->insert(t);
 		}
 	}
@@ -1018,11 +953,7 @@ void ResourceLoaderBinary::open(Ref<FileAccess> p_f, bool p_no_resources, bool p
 	ver_format = f->get_32();
 
 	print_bl("big endian: " + itos(big_endian));
-#ifdef BIG_ENDIAN_ENABLED
-	print_bl("endian swap: " + itos(!big_endian));
-#else
 	print_bl("endian swap: " + itos(big_endian));
-#endif
 	print_bl("real64: " + itos(use_real64));
 	print_bl("major: " + itos(ver_major));
 	print_bl("minor: " + itos(ver_minor));
@@ -1201,7 +1132,7 @@ String ResourceLoaderBinary::recognize_script_class(Ref<FileAccess> p_f) {
 		return "";
 	}
 
-	get_unicode_string(); // type
+	_ALLOW_DISCARD_ get_unicode_string(); // type
 
 	f->get_64(); // Metadata offset
 	uint32_t flags = f->get_32();
@@ -1348,13 +1279,10 @@ Error ResourceFormatLoaderBinary::rename_dependencies(const String &p_path, cons
 	bool use_real64 = f->get_32();
 
 	f->set_big_endian(big_endian != 0); //read big endian if saved as big endian
-#ifdef BIG_ENDIAN_ENABLED
-	fw->store_32(!big_endian);
-#else
+
 	fw->store_32(big_endian);
-#endif
-	fw->set_big_endian(big_endian != 0);
 	fw->store_32(use_real64); //use real64
+	fw->set_big_endian(big_endian != 0);
 
 	uint32_t ver_major = f->get_32();
 	uint32_t ver_minor = f->get_32();
@@ -1527,6 +1455,43 @@ void ResourceFormatLoaderBinary::get_classes_used(const String &p_path, HashSet<
 	loader.local_path = ProjectSettings::get_singleton()->localize_path(p_path);
 	loader.res_path = loader.local_path;
 	loader.get_classes_used(f, r_classes);
+
+	if (loader.type != "PackedScene") {
+		return;
+	}
+
+	// Fetch the nodes inside scene files.
+
+	// Reopening is necessary, or errors will occur.
+	f->reopen(p_path, FileAccess::READ);
+	loader.open(f);
+	ERR_FAIL_COND(loader.load() != OK);
+
+	Ref<SceneState> state = Ref<PackedScene>(loader.get_resource())->get_state();
+	for (int i = 0; i < state->get_node_count(); i++) {
+		const StringName node_name = state->get_node_type(i);
+		if (ClassDB::class_exists(node_name)) {
+			r_classes->insert(node_name);
+		}
+
+		// Fetch the values of properties in the node.
+		for (int j = 0; j < state->get_node_property_count(i); j++) {
+			const Variant var = state->get_node_property_value(i, j);
+			if (var.get_type() != Variant::OBJECT) {
+				continue;
+			}
+
+			const Object *obj = var.get_validated_object();
+			if (obj == nullptr) {
+				continue;
+			}
+
+			const StringName obj_name = obj->get_class_name();
+			if (ClassDB::class_exists(obj_name)) {
+				r_classes->insert(obj_name);
+			}
+		}
+	}
 }
 
 String ResourceFormatLoaderBinary::get_resource_type(const String &p_path) const {
@@ -2174,12 +2139,12 @@ Error ResourceFormatSaverBinaryInstance::save(const String &p_path, const Ref<Re
 
 	if (big_endian) {
 		f->store_32(1);
-		f->set_big_endian(true);
 	} else {
 		f->store_32(0);
 	}
-
 	f->store_32(0); //64 bits file, false for now
+	f->set_big_endian(big_endian);
+
 	f->store_32(GODOT_VERSION_MAJOR);
 	f->store_32(GODOT_VERSION_MINOR);
 	f->store_32(FORMAT_VERSION);
@@ -2262,7 +2227,8 @@ Error ResourceFormatSaverBinaryInstance::save(const String &p_path, const Ref<Re
 						}
 					}
 
-					Variant default_value = ClassDB::class_get_default_property_value(E->get_class(), F.name);
+					bool is_script = F.name == CoreStringName(script);
+					Variant default_value = is_script ? Variant() : PropertyUtils::get_property_default_value(E.ptr(), F.name);
 
 					if (default_value.get_type() != Variant::NIL && bool(Variant::evaluate(Variant::OP_EQUAL, p.value, default_value))) {
 						continue;
@@ -2418,13 +2384,10 @@ Error ResourceFormatSaverBinaryInstance::set_uid(const String &p_path, ResourceU
 	big_endian = f->get_32();
 	bool use_real64 = f->get_32();
 	f->set_big_endian(big_endian != 0); //read big endian if saved as big endian
-#ifdef BIG_ENDIAN_ENABLED
-	fw->store_32(!big_endian);
-#else
+
 	fw->store_32(big_endian);
-#endif
-	fw->set_big_endian(big_endian != 0);
 	fw->store_32(use_real64); //use real64
+	fw->set_big_endian(big_endian != 0);
 
 	uint32_t ver_major = f->get_32();
 	uint32_t ver_minor = f->get_32();
@@ -2517,8 +2480,6 @@ void ResourceFormatSaverBinary::get_recognized_extensions(const Ref<Resource> &p
 		p_extensions->push_back("res");
 	}
 }
-
-ResourceFormatSaverBinary *ResourceFormatSaverBinary::singleton = nullptr;
 
 ResourceFormatSaverBinary::ResourceFormatSaverBinary() {
 	singleton = this;
