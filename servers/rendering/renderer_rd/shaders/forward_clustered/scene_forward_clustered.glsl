@@ -1080,6 +1080,153 @@ layout(location = 2) out vec2 motion_vector;
 #define SPECULAR_SCHLICK_GGX
 #endif
 
+#define VOXEL_OCCUPANCY_AVAILABLE
+
+#if defined(VOXEL_OCCUPANCY_SHADOWS_USED)
+uint voxel_occupancy_brick_hash(ivec3 position) {
+	return uint(position.x) * 73856093u ^ uint(position.y) * 19349663u ^ uint(position.z) * 83492791u;
+}
+
+uint voxel_occupancy_find_brick(ivec3 position) {
+	uint slot = voxel_occupancy_brick_hash(position) & uint(voxel_occupancy_data.directory_steps.x);
+	for (uint probe = 0u; probe < 64u; probe++) {
+		uvec4 entry = voxel_world_directory.entries[slot];
+		if (entry.w == 0u) {
+			return 0u;
+		}
+		if (ivec3(entry.xyz) == position) {
+			return entry.w;
+		}
+		slot = (slot + 1u) & uint(voxel_occupancy_data.directory_steps.x);
+	}
+	return 0u;
+}
+
+float voxel_occupancy_distance_to_exit(vec3 position, vec3 direction, float cell_size) {
+	vec3 cell = floor(position / cell_size);
+	vec3 boundary = (cell + step(vec3(0.0), direction)) * cell_size;
+	vec3 distance = vec3(1e30);
+	if (abs(direction.x) > 1e-8) distance.x = (boundary.x - position.x) / direction.x;
+	if (abs(direction.y) > 1e-8) distance.y = (boundary.y - position.y) / direction.y;
+	if (abs(direction.z) > 1e-8) distance.z = (boundary.z - position.z) / direction.z;
+	return max(min(distance.x, min(distance.y, distance.z)), 0.0001);
+}
+
+bool voxel_occupancy_mixed_brick_occupied(uint code, ivec3 local_voxel) {
+	uint local_index = uint(local_voxel.x + local_voxel.y * 8 + local_voxel.z * 64);
+	uint word = voxel_mixed_bricks.words[(code - 2u) * 16u + (local_index >> 5u)];
+	return (word & (1u << (local_index & 31u))) != 0u;
+}
+
+float voxel_occupancy_trace_local_shadow(vec3 receiver_position, vec3 direction_world, float maximum_distance) {
+	vec3 ray_position = receiver_position + direction_world * 0.001;
+	ivec3 start_brick_position = ivec3(floor(ray_position / 8.0));
+	uint start_code = voxel_occupancy_find_brick(start_brick_position);
+	bool skipping_receiver = start_code == 1u;
+	if (start_code >= 2u) {
+		ivec3 start_voxel_position = ivec3(floor(ray_position));
+		skipping_receiver = voxel_occupancy_mixed_brick_occupied(start_code, start_voxel_position - start_brick_position * 8);
+	}
+
+	float traveled = 0.0;
+	for (int step_index = 0; step_index < voxel_occupancy_data.directory_steps.y && traveled < maximum_distance; step_index++) {
+		ivec3 brick_position = ivec3(floor(ray_position / 8.0));
+		uint code = voxel_occupancy_find_brick(brick_position);
+		if (code == 0u) {
+			skipping_receiver = false;
+			float advance = voxel_occupancy_distance_to_exit(ray_position, direction_world, 8.0) + 0.001;
+			ray_position += direction_world * advance;
+			traveled += advance;
+			continue;
+		}
+		if (code == 1u) {
+			if (!skipping_receiver) return 0.0;
+			float advance = voxel_occupancy_distance_to_exit(ray_position, direction_world, 8.0) + 0.001;
+			ray_position += direction_world * advance;
+			traveled += advance;
+			continue;
+		}
+
+		ivec3 voxel_position = ivec3(floor(ray_position));
+		ivec3 local_voxel = voxel_position - brick_position * 8;
+		if (voxel_occupancy_mixed_brick_occupied(code, local_voxel)) {
+			if (!skipping_receiver) return 0.0;
+		} else {
+			skipping_receiver = false;
+		}
+		float advance = voxel_occupancy_distance_to_exit(ray_position, direction_world, 1.0) + 0.001;
+		ray_position += direction_world * advance;
+		traveled += advance;
+	}
+	return 1.0;
+}
+
+vec2 voxel_occupancy_disk_sample(int sample_index, int sample_count) {
+	if (sample_index == 0) return vec2(-0.625, -0.250);
+	if (sample_index == 1) return vec2(0.250, -0.625);
+	if (sample_index == 2) return vec2(0.625, 0.250);
+	if (sample_index == 3) return vec2(-0.250, 0.625);
+	if (sample_index == 4) return vec2(-0.300, -0.100);
+	if (sample_index == 5) return vec2(0.100, -0.300);
+	if (sample_index == 6) return vec2(0.300, 0.100);
+	return vec2(-0.100, 0.300);
+}
+
+float voxel_occupancy_local_shadow(vec3 receiver_view, vec3 receiver_normal_view, vec3 light_direction_view, float light_distance) {
+	if (voxel_occupancy_data.directory_steps.w == 0 ||
+			voxel_occupancy_data.directory_steps.x <= 0 ||
+			voxel_occupancy_data.world_origin_voxel_size.w <= 0.0) {
+		return 1.0;
+	}
+
+	mat4 inv_view_matrix = transpose(mat4(scene_data_block.data.inv_view_matrix[0],
+			scene_data_block.data.inv_view_matrix[1],
+			scene_data_block.data.inv_view_matrix[2],
+			vec4(0.0, 0.0, 0.0, 1.0)));
+	vec3 receiver_world = (inv_view_matrix * vec4(receiver_view, 1.0)).xyz;
+	vec3 receiver_normal_world = normalize(mat3(inv_view_matrix) * receiver_normal_view);
+	vec3 direction_world = normalize(mat3(inv_view_matrix) * light_direction_view);
+	float voxel_size = voxel_occupancy_data.world_origin_voxel_size.w;
+	vec3 receiver_position = (receiver_world - voxel_occupancy_data.world_origin_voxel_size.xyz) / voxel_size;
+	float maximum_world_distance = min(light_distance, voxel_occupancy_data.limits.x);
+	float maximum_distance = maximum_world_distance / voxel_size;
+	if (maximum_distance <= 0.001) {
+		return 1.0;
+	}
+
+	int sample_count = clamp(int(voxel_occupancy_data.limits.z + 0.5), 1, 8);
+	// Filter neighboring positions on the receiver plane. This remains
+	// independent from Light3D.size and avoids resolving a small virtual light
+	// into several visibly displaced hard shadows.
+	float radius_voxels = voxel_occupancy_data.limits.w;
+	if (voxel_occupancy_data.limits.y < 0.5 || radius_voxels <= 0.0001 || sample_count == 1) {
+		return voxel_occupancy_trace_local_shadow(receiver_position, direction_world, maximum_distance);
+	}
+
+	vec3 tangent = abs(receiver_normal_world.x) > 0.5 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+	vec3 bitangent = normalize(cross(receiver_normal_world, tangent));
+	vec3 light_vector_world = direction_world * light_distance;
+	float visibility = 0.0;
+	for (int sample_index = 0; sample_index < 8; sample_index++) {
+		if (sample_index >= sample_count) break;
+		vec2 face_offset = voxel_occupancy_disk_sample(sample_index, sample_count) * radius_voxels;
+		float largest_axis = max(abs(face_offset.x), abs(face_offset.y));
+		if (largest_axis > 0.45) {
+			face_offset *= 0.45 / largest_axis;
+		}
+		vec3 sample_offset_world = (tangent * face_offset.x + bitangent * face_offset.y) * voxel_size;
+		vec3 sample_position = receiver_position + sample_offset_world / voxel_size;
+		vec3 sample_vector_world = light_vector_world - sample_offset_world;
+		float sample_distance = min(length(sample_vector_world), voxel_occupancy_data.limits.x) / voxel_size;
+		visibility += voxel_occupancy_trace_local_shadow(sample_position, normalize(sample_vector_world), sample_distance);
+	}
+	float averaged_visibility = visibility / float(sample_count);
+	if (visibility <= 1.0) averaged_visibility = 0.0;
+	if (visibility >= float(sample_count - 1)) averaged_visibility = 1.0;
+	return averaged_visibility;
+}
+#endif
+
 #include "../scene_forward_lights_inc.glsl"
 
 #include "../scene_forward_gi_inc.glsl"
@@ -1320,6 +1467,12 @@ void fragment_shader(in SceneData scene_data) {
 #ifdef LIGHT_VERTEX_USED
 	vec3 light_vertex = vertex;
 #endif //LIGHT_VERTEX_USED
+#ifdef LIGHTING_VERTEX_USED
+	vec3 lighting_vertex = vertex;
+#endif // LIGHTING_VERTEX_USED
+#ifdef VOXEL_OCCUPANCY_SHADOWS_USED
+	bool voxel_occupancy_shadows = false;
+#endif
 
 	mat3 model_normal_matrix;
 	if (bool(instances.data[instance_index].flags & INSTANCE_FLAGS_NON_UNIFORM_SCALE)) {
@@ -1363,16 +1516,17 @@ void fragment_shader(in SceneData scene_data) {
 	transmittance_color.a *= sss_strength;
 #endif
 
+vec3 view = view_highp;
 #ifdef LIGHT_VERTEX_USED
 	vertex = light_vertex;
-#ifdef USE_MULTIVIEW
-	vec3 view = -normalize(vertex - eye_offset);
-#else
-	vec3 view = -normalize(vertex);
-#endif //USE_MULTIVIEW
-#else
-	vec3 view = view_highp;
 #endif //LIGHT_VERTEX_USED
+#ifdef LIGHT_VERTEX_USED
+#ifdef USE_MULTIVIEW
+	view = -normalize(vertex - eye_offset);
+#else
+	view = -normalize(vertex);
+#endif //USE_MULTIVIEW
+#endif // LIGHT_VERTEX_USED
 
 #ifdef NORMAL_USED
 	vec3 geo_normal = normalize(normal);
@@ -2695,6 +2849,9 @@ void fragment_shader(in SceneData scene_data) {
 	}
 
 #ifndef USE_VERTEX_LIGHTING
+#if defined(VOXEL_OCCUPANCY_SHADOWS_USED)
+	uint voxel_shadowed_local_light_count = 0u;
+#endif
 	{ //omni lights
 
 		uint cluster_omni_offset = cluster_offset;
@@ -2732,7 +2889,21 @@ void fragment_shader(in SceneData scene_data) {
 					continue; // Statically baked light and object uses lightmap, skip
 				}
 
-				light_process_omni(light_index, vertex, view, normal, vertex_ddx, vertex_ddy, f0, roughness, metallic, scene_data.taa_frame_count, albedo, alpha, screen_uv, energy_compensation,
+				bool use_voxel_occupancy_shadow = false;
+#if defined(VOXEL_OCCUPANCY_SHADOWS_USED)
+				if (omni_lights.data[light_index].shadow_opacity > 0.001 &&
+						voxel_shadowed_local_light_count < uint(max(voxel_occupancy_data.directory_steps.z, 0))) {
+					use_voxel_occupancy_shadow = true;
+					voxel_shadowed_local_light_count++;
+				}
+#endif
+				light_process_omni(light_index, vertex,
+#ifdef LIGHTING_VERTEX_USED
+						lighting_vertex,
+#else
+						vertex,
+#endif
+						use_voxel_occupancy_shadow, view, normal, vertex_ddx, vertex_ddy, f0, roughness, metallic, scene_data.taa_frame_count, albedo, alpha, screen_uv, energy_compensation,
 #ifdef LIGHT_BACKLIGHT_USED
 						backlight,
 #endif
@@ -2793,7 +2964,21 @@ void fragment_shader(in SceneData scene_data) {
 					continue; // Statically baked light and object uses lightmap, skip
 				}
 
-				light_process_spot(light_index, vertex, view, normal, vertex_ddx, vertex_ddy, f0, roughness, metallic, scene_data.taa_frame_count, albedo, alpha, screen_uv, energy_compensation,
+				bool use_voxel_occupancy_shadow = false;
+#if defined(VOXEL_OCCUPANCY_SHADOWS_USED)
+				if (spot_lights.data[light_index].shadow_opacity > 0.001 &&
+						voxel_shadowed_local_light_count < uint(max(voxel_occupancy_data.directory_steps.z, 0))) {
+					use_voxel_occupancy_shadow = true;
+					voxel_shadowed_local_light_count++;
+				}
+#endif
+				light_process_spot(light_index, vertex,
+#ifdef LIGHTING_VERTEX_USED
+						lighting_vertex,
+#else
+						vertex,
+#endif
+						use_voxel_occupancy_shadow, view, normal, vertex_ddx, vertex_ddy, f0, roughness, metallic, scene_data.taa_frame_count, albedo, alpha, screen_uv, energy_compensation,
 #ifdef LIGHT_BACKLIGHT_USED
 						backlight,
 #endif

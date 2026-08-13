@@ -6,7 +6,8 @@
 	<description>
 		Displays [member voxel_data] by ray marching sparse 8 × 8 × 8 bricks inside a procedural box proxy. Palette index [code]0[/code] is empty; indices [code]1..255[/code] are occupied and address the textures stored by [VoxelShapeData].
 		The node origin is the minimum corner of voxel [code](0, 0, 0)[/code]. The local bounds are [member VoxelShapeData.dimensions] multiplied by [member VoxelShapeData.voxel_size]. Use the coordinate conversion methods instead of duplicating this calculation when the node may be transformed.
-		The assigned [VoxelMaterial] stores authored settings. The node creates a private runtime material and GPU textures, so multiple volumes can safely share the same authored material.
+		The assigned [VoxelMaterial] stores authored settings. A resident node creates a private runtime material and GPU textures, so multiple volumes can safely share the same authored material without making nonresident volumes pay the GPU setup cost.
+		When [code]rendering/voxel_volume/shadow_proxy/enabled[/code] is enabled, a resident volume casts conventional shadows from an exact voxel-resolution shadow-only mesh instead of rerunning the visible DDA shader in every shadow-map cascade. Runtime voxel edits rebuild this mesh.
 		For collision, assign the same [VoxelShapeData] to a [VoxelShape3D] used by a [CollisionShape3D].
 	</description>
 	<tutorials>
@@ -168,7 +169,7 @@
 			The sparse voxel resource rendered by this node.
 		</member>
 		<member name="voxel_material" type="VoxelMaterial" setter="set_voxel_material" getter="get_voxel_material">
-			Authored shading configuration copied into this volume's private runtime material.
+			Shared authored shading configuration. Assign the same resource to multiple volumes to update all of them together; volume-specific GPU textures remain private.
 		</member>
 	</members>
 	<constants>

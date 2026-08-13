@@ -32,6 +32,7 @@
 
 #include "core/io/resource_loader.h"
 #include "core/os/os.h"
+#include "servers/rendering/rendering_method.h"
 #include "servers/rendering/shader_expression.h"
 
 const char32_t CURSOR = 0xFFFF;
@@ -1352,7 +1353,7 @@ Error ShaderPreprocessor::preprocess(const String &p_code, const String &p_filen
 	{
 		const String rendering_method = OS::get_singleton()->get_current_rendering_method();
 
-		if (rendering_method == "forward_plus") {
+		if (RenderingMethod::is_forward_plus_method(rendering_method)) {
 			insert_builtin_define("CURRENT_RENDERER", _MKSTR(2), pp_state);
 		} else if (rendering_method == "mobile") {
 			insert_builtin_define("CURRENT_RENDERER", _MKSTR(1), pp_state);

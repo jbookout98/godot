@@ -1,5 +1,4 @@
 # Voxel Physics 3D
-
 `voxel_physics_3d` is a Godot engine module that combines a voxel-aware 3D
 physics backend with sparse voxel storage and GPU ray-marched voxel rendering.
 It is a fork of GodotPhysics3D, so it replaces rather than supplements the
@@ -90,7 +89,7 @@ Every flushed voxel edit increments `revision`, emits
 `changed` notification. `position` and `size` describe the inclusive union of
 all modified cells in that edit transaction.
 
-Storage uses `VoxelBrickStorage`, which divides the volume into 8 × 8 × 8
+Storage uses `VoxelBrickStorage`, which divides the volume into 8 Ã— 8 Ã— 8
 bricks. A brick is empty, uniform, or mixed. Only mixed bricks allocate a
 512-byte payload. `sparse_brick_data` is the serialized representation.
 `voxel_data` and `solid_voxels` materialize dense arrays and exist for scripting
@@ -147,17 +146,52 @@ process frames. A per-volume
 `streaming_distance` of zero uses
 `rendering/voxel_volume/streaming_distance`. Eligible volumes are sorted by
 camera distance and capped by
-`rendering/voxel_volume/max_resident_volumes`. A volume without an active
-camera remains resident. Streaming releases rendering textures and geometry;
-the CPU voxel resource remains available.
+`rendering/voxel_volume/max_resident_volumes`. New GPU residents are limited by
+`rendering/voxel_volume/max_loads_per_frame`, so a large initial set becomes
+visible over several frames instead of blocking play. Automatic volumes wait
+for an active camera before loading. Streaming releases rendering textures and
+geometry; the CPU voxel resource remains available.
+
+### Stable shadow geometry
+
+By default, `rendering/voxel_volume/shadow_proxy/enabled` removes the visible
+DDA volume from shadow-map passes and creates a separate `SHADOWS_ONLY` mesh.
+The mesh uses exact source-voxel boundaries and hidden-face removal, so its
+silhouette matches the raymarched surface without rerunning the DDA shader in
+every cascade. Runtime voxel edits rebuild the mesh.
+
+The earlier camera-centered occupancy-shadow experiment remains disabled by
+default. Its moving fine/coarse grids are not used by `VoxelMaterial`; they can
+produce temporal instability and discontinuities between volumes. Change the
+shadow mode before loading a scene so instances initialize consistently.
+
+Voxel Forward's world occupancy path is enabled with
+`rendering/voxel_forward/shadow_mask/enabled`. Its default `Hard` mode traces
+one stable binary ray per voxel-face lighting point. Set
+`soft_shadow_mode` to `Voxel Soft` to trace a fixed eight-ray, two-dimensional
+receiver-plane pattern instead. `soft_shadow_radius_voxels` controls that
+pattern's radius without changing any DirectionalLight3D, OmniLight3D, or
+SpotLight3D size, direction, energy, attenuation, or BRDF value. Every sample
+is constrained to the representative face, preventing neighboring empty voxels
+from creating false partial visibility. The two centered four-ray rings provide
+finer shade levels and reject one disagreeing DDA sample at either end of the
+visibility range. The result is averaged once for the representative voxel
+face, so penumbra values step between voxel faces instead of varying smoothly
+across a face. Hard mode retains the binary majority cleanup pass; Voxel Soft
+keeps its eight-ray value directly instead of mixing unrelated screen-space
+neighbors across face and silhouette boundaries.
+Local-light occupancy traces remain bounded by `max_local_lights`,
+`max_distance`, and `max_steps`.
 
 ### VoxelShape3D
 
 `VoxelShape3D` adapts `VoxelShapeData` to a `Shape3D` RID with custom physics
 shape type. Assign it to a `CollisionShape3D`. Resource changes are forwarded
 to the active physics server, so edits update collision without replacing the
-shape resource. Debug geometry displays the volume bounds, not every occupied
-cell.
+shape resource. Collision feature caches are created lazily per 8 x 8 x 8
+brick, so distant chunks do not delay scene loading and bounded character
+queries do not initialize unrelated bricks.
+Debug geometry displays the volume bounds, not every occupied cell.
 
 ### VoxelMaterial
 
@@ -198,7 +232,7 @@ input. Separate budgets prevent edge contacts from starving corner contacts.
 The final manifold is selected from the bounded combined set for penetration
 and spatial spread.
 
-Edge membership is cached as a 512-bit mask in each 8³ physics brick. The
+Edge membership is cached as a 512-bit mask in each 8Â³ physics brick. The
 edge-edge inner loop reads this mask directly instead of reclassifying the
 target voxel and querying its six neighbors for every nearby edge candidate.
 
@@ -225,7 +259,7 @@ diagnostics.
 - The brick-directory 3D texture has one RGBA8 texel per logical brick. Empty
   bricks use code 0, uniform bricks use code 1 with the palette value in alpha,
   and mixed bricks store an atlas slot plus 2.
-- The L8 mixed-brick atlas tightly packs only mixed 8³ payloads. Empty and
+- The L8 mixed-brick atlas tightly packs only mixed 8Â³ payloads. Empty and
   uniform bricks consume no atlas payload.
 
 The generated shader intersects the camera ray with the proxy AABB, traverses
@@ -256,7 +290,7 @@ the opaque variant. Unlit mode adds the spatial shader `unshaded` render mode.
 
 - `voxel_shape_data.*`: resource API, edit transactions, topology derivation,
   textures, and feature-shape configuration.
-- `voxel_brick_storage.*`: sparse 8³ brick representation, normalization,
+- `voxel_brick_storage.*`: sparse 8Â³ brick representation, normalization,
   dense conversion, serialization, revisions, and dirty flags.
 - `voxel_volume_3d.*`: visual node, GPU texture construction, coordinate
   conversion, and residency transitions.
@@ -312,6 +346,6 @@ If the classes disappear from the editor:
 
 Keep script-visible declarations and `doc_classes/*.xml` synchronized. Preserve
 the meaning of palette index zero, X-major indexing, the six topology mask
-bits, and the 8³ brick serialization format unless a migration path is added.
+bits, and the 8Â³ brick serialization format unless a migration path is added.
 Changes to callback feature indices must preserve voxel identity because body
 pair persistence and contact reporting depend on them.

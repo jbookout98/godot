@@ -35,7 +35,7 @@
 #include "godot_voxel_shape_3d.h"
 
 #define MIN_VELOCITY 0.0001
-#define MAX_BIAS_ROTATION (Math_PI / 8)
+#define MAX_BIAS_ROTATION (Math::PI / 8)
 
 static Vector3i _voxel_position_from_index(const GodotShape3D *p_shape, int p_index) {
 	if (p_shape == nullptr || p_shape->get_type() != PhysicsServer3D::SHAPE_CUSTOM || p_index < 0) {
@@ -332,7 +332,7 @@ real_t combine_bounce(GodotBody3D *A, GodotBody3D *B) {
 }
 
 real_t combine_friction(GodotBody3D *A, GodotBody3D *B) {
-	return ABS(MIN(A->get_friction(), B->get_friction()));
+	return Math::abs(MIN(A->get_friction(), B->get_friction()));
 }
 
 bool GodotBodyPair3D::setup(real_t p_step) {

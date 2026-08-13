@@ -36,6 +36,7 @@
 #include "core/templates/rb_set.h"
 #include "servers/rendering/renderer_compositor.h"
 #include "servers/rendering/rendering_server.h"
+#include "servers/rendering/rendering_method.h"
 #include "servers/rendering/rendering_server_globals.h"
 #include "servers/rendering/shader_types.h"
 
@@ -10065,7 +10066,7 @@ Error ShaderLanguage::_parse_shader(const HashMap<StringName, FunctionInfo> &p_f
 									new_hint = ShaderNode::Uniform::HINT_NORMAL_ROUGHNESS_TEXTURE;
 									--texture_uniforms;
 									--texture_binding;
-									if (OS::get_singleton()->get_current_rendering_method() != "forward_plus") {
+									if (!RenderingMethod::is_current_forward_plus_method()) {
 										_set_error(RTR("'hint_normal_roughness_texture' is only available when using the Forward+ renderer."));
 										return ERR_PARSE_ERROR;
 									}

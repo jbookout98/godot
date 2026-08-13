@@ -1023,7 +1023,7 @@ void RendererViewport::viewport_set_scaling_3d_mode(RID p_viewport, RSE::Viewpor
 	Viewport *viewport = viewport_owner.get_or_null(p_viewport);
 	ERR_FAIL_NULL(viewport);
 	const String rendering_method = OS::get_singleton()->get_current_rendering_method();
-	if (rendering_method != "forward_plus") {
+	if (!RenderingMethod::is_forward_plus_method(rendering_method)) {
 		if (p_mode == RSE::VIEWPORT_SCALING_3D_MODE_FSR) {
 			WARN_PRINT_ONCE_ED("FSR1 3D scaling is only available when using the Forward+ renderer.");
 			return;
@@ -1446,7 +1446,7 @@ void RendererViewport::viewport_set_screen_space_aa(RID p_viewport, RSE::Viewpor
 void RendererViewport::viewport_set_use_taa(RID p_viewport, bool p_use_taa) {
 	Viewport *viewport = viewport_owner.get_or_null(p_viewport);
 	ERR_FAIL_NULL(viewport);
-	if (OS::get_singleton()->get_current_rendering_method() != "forward_plus") {
+	if (!RenderingMethod::is_current_forward_plus_method()) {
 		WARN_PRINT_ONCE_ED("TAA is only available when using the Forward+ renderer.");
 		return;
 	}

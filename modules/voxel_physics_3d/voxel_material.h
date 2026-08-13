@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scene/resources/material.h"
+#include "scene/resources/texture.h"
 
 class VoxelMaterial : public ShaderMaterial {
 	GDCLASS(VoxelMaterial, ShaderMaterial);
@@ -10,10 +11,28 @@ public:
 		SHADING_MODE_UNLIT,
 		SHADING_MODE_PBR,
 	};
+	enum LightingPositionMode {
+		LIGHTING_POSITION_EXACT_HIT,
+		LIGHTING_POSITION_VOXEL_FACE_CENTER,
+	};
 
 private:
 	ShadingMode shading_mode = SHADING_MODE_PBR;
+	LightingPositionMode lighting_position_mode = LIGHTING_POSITION_VOXEL_FACE_CENTER;
+	Color albedo_modulate = Color(1, 1, 1, 1);
+	Ref<Texture2D> palette_texture;
+	Ref<Texture2D> material_texture;
+	Ref<Texture2D> metallic_texture;
+	Ref<Texture2D> transparency_texture;
+	Ref<Texture2D> specularity_texture;
+	Ref<Texture2D> emission_texture;
+	real_t roughness_multiplier = 1.0;
+	real_t metallic_multiplier = 1.0;
+	real_t specularity_multiplier = 1.0;
 	real_t emission_energy = 1.0;
+	bool outline_enabled = false;
+	Color outline_color = Color(0, 0, 0, 1);
+	real_t outline_width = 1.0;
 	bool transparency_enabled = false;
 	void _rebuild_shader();
 
@@ -23,8 +42,36 @@ protected:
 public:
 	void set_shading_mode(ShadingMode p_mode);
 	ShadingMode get_shading_mode() const;
+	void set_lighting_position_mode(LightingPositionMode p_mode);
+	LightingPositionMode get_lighting_position_mode() const;
 	void set_emission_energy(real_t p_energy);
 	real_t get_emission_energy() const;
+	void set_albedo_modulate(const Color &p_color);
+	Color get_albedo_modulate() const;
+	void set_palette_texture(const Ref<Texture2D> &p_texture);
+	Ref<Texture2D> get_palette_texture() const;
+	void set_material_texture(const Ref<Texture2D> &p_texture);
+	Ref<Texture2D> get_material_texture() const;
+	void set_metallic_texture(const Ref<Texture2D> &p_texture);
+	Ref<Texture2D> get_metallic_texture() const;
+	void set_transparency_texture(const Ref<Texture2D> &p_texture);
+	Ref<Texture2D> get_transparency_texture() const;
+	void set_specularity_texture(const Ref<Texture2D> &p_texture);
+	Ref<Texture2D> get_specularity_texture() const;
+	void set_emission_texture(const Ref<Texture2D> &p_texture);
+	Ref<Texture2D> get_emission_texture() const;
+	void set_roughness_multiplier(real_t p_multiplier);
+	real_t get_roughness_multiplier() const;
+	void set_metallic_multiplier(real_t p_multiplier);
+	real_t get_metallic_multiplier() const;
+	void set_specularity_multiplier(real_t p_multiplier);
+	real_t get_specularity_multiplier() const;
+	void set_outline_enabled(bool p_enabled);
+	bool is_outline_enabled() const;
+	void set_outline_color(const Color &p_color);
+	Color get_outline_color() const;
+	void set_outline_width(real_t p_width);
+	real_t get_outline_width() const;
 	void set_transparency_enabled(bool p_enabled);
 	bool is_transparency_enabled() const;
 	// VoxelMaterial is serialized as lightweight configuration. VoxelVolume3D
@@ -37,3 +84,4 @@ public:
 };
 
 VARIANT_ENUM_CAST(VoxelMaterial::ShadingMode);
+VARIANT_ENUM_CAST(VoxelMaterial::LightingPositionMode);

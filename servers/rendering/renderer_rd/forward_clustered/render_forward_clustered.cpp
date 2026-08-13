@@ -388,6 +388,17 @@ void RenderForwardClustered::_render_list_template(RenderingDevice::DrawListID p
 			continue;
 		}
 
+		// Shader and texture changes invalidate a material's descriptor set until
+		// MaterialStorage rebuilds it. Drawing with no replacement set leaves the
+		// previous surface's set bound, which can have a different layout and makes
+		// RenderingDevice reject the draw. Surfaces whose shaders require material
+		// data must wait for their matching set instead.
+		const bool material_set_required = shader->ubo_size > 0 || !shader->texture_uniforms.is_empty();
+		if (material_set_required && (!material_uniform_set.is_valid() || !RD::get_singleton()->uniform_set_is_valid(material_uniform_set))) {
+			should_request_redraw = true;
+			continue;
+		}
+
 		//request a redraw if one of the shaders uses TIME
 		if (shader->uses_time) {
 			should_request_redraw = true;
@@ -2136,7 +2147,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 
 		RID rp_uniform_set = _setup_render_pass_uniform_set(RENDER_LIST_OPAQUE, nullptr, RID(), samplers, depth_prepass_uniform_buffer_index);
 
-		bool finish_depth = using_ssao || using_ssil || using_sdfgi || using_voxelgi || ce_pre_opaque_resolved_depth || ce_post_opaque_resolved_depth;
+		bool finish_depth = using_ssao || using_ssil || using_sdfgi || using_voxelgi || ce_pre_opaque_resolved_depth || ce_post_opaque_resolved_depth || _render_scene_custom_uses_resolved_depth();
 		RenderListParameters render_list_params(render_list[RENDER_LIST_OPAQUE].elements.ptr(), render_list[RENDER_LIST_OPAQUE].element_info.ptr(), render_list[RENDER_LIST_OPAQUE].elements.size(), reverse_cull, depth_pass_mode, 0, rb_data.is_null(), p_render_data->directional_light_soft_shadows, rp_uniform_set, get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_WIREFRAME, Vector2(), p_render_data->scene_data->lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, p_render_data->scene_data->view_count, 0, base_specialization);
 		_render_list_with_draw_list(&render_list_params, depth_framebuffer, RD::DrawFlags(needs_pre_resolve ? RD::DRAW_DEFAULT_ALL : RD::DRAW_CLEAR_ALL), depth_pass_clear, 0.0f, 0u, p_render_data->render_region);
 
@@ -2180,6 +2191,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		}
 	}
 	_pre_opaque_render(p_render_data, using_ssao, using_ssil, using_ssr, using_sdfgi || using_voxelgi, normal_roughness_views, rb_data.is_valid() && rb_data->has_voxelgi() ? rb_data->get_voxelgi() : RID());
+	_render_scene_custom_pre_opaque(p_render_data, depth_pre_pass);
 
 	if (current_cluster_builder) {
 		base_specialization.cluster_has_area_light = current_cluster_builder->get_cluster_count_by_type(ClusterBuilderRD::ELEMENT_TYPE_AREA_LIGHT) != 0;
@@ -2222,6 +2234,10 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			RID opaque_framebuffer = using_motion_pass ? rb_data->get_color_pass_fb(opaque_color_pass_flags) : color_framebuffer;
 			RenderListParameters render_list_params(render_list[RENDER_LIST_OPAQUE].elements.ptr(), render_list[RENDER_LIST_OPAQUE].element_info.ptr(), render_list[RENDER_LIST_OPAQUE].elements.size(), reverse_cull, PASS_MODE_COLOR, opaque_color_pass_flags, rb_data.is_null(), p_render_data->directional_light_soft_shadows, rp_uniform_set, get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_WIREFRAME, Vector2(), p_render_data->scene_data->lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, p_render_data->scene_data->view_count, 0, base_specialization);
 			_render_list_with_draw_list(&render_list_params, opaque_framebuffer, RD::DrawFlags(load_color ? RD::DRAW_DEFAULT_ALL : RD::DRAW_CLEAR_COLOR_ALL) | (depth_pre_pass ? RD::DRAW_DEFAULT_ALL : RD::DRAW_CLEAR_DEPTH), c, 0.0f, 0u, p_render_data->render_region);
+			const uint32_t color_attachment_count = 1 +
+					((opaque_color_pass_flags & COLOR_PASS_FLAG_SEPARATE_SPECULAR) != 0 ? 1 : 0) +
+					((opaque_color_pass_flags & COLOR_PASS_FLAG_MOTION_VECTORS) != 0 ? 1 : 0);
+			_render_scene_custom_opaque(p_render_data, opaque_framebuffer, opaque_color_pass_flags, color_attachment_count, depth_pre_pass);
 		}
 
 		RD::get_singleton()->draw_command_end_label();
@@ -3185,6 +3201,24 @@ void RenderForwardClustered::base_uniforms_changed() {
 	render_base_uniform_set = RID();
 }
 
+void RenderForwardClustered::_add_voxel_occupancy_uniforms(Vector<RD::Uniform> &r_uniforms) {
+	// These bindings are only read by shaders that write LIGHTING_VERTEX. Stock
+	// Forward+ materials still need descriptor-compatible dummy resources.
+	for (uint32_t binding = 21; binding <= 22; binding++) {
+		RD::Uniform u;
+		u.binding = binding;
+		u.uniform_type = RD::UNIFORM_TYPE_STORAGE_BUFFER;
+		u.append_id(scene_shader.default_vec4_xform_buffer);
+		r_uniforms.push_back(u);
+	}
+	RD::Uniform u;
+	u.binding = 23;
+	u.uniform_type = RD::UNIFORM_TYPE_UNIFORM_BUFFER;
+	u.append_id(sdfgi_get_ubo());
+	r_uniforms.push_back(u);
+
+}
+
 void RenderForwardClustered::_update_render_base_uniform_set() {
 	RendererRD::LightStorage *light_storage = RendererRD::LightStorage::get_singleton();
 
@@ -3373,6 +3407,8 @@ void RenderForwardClustered::_update_render_base_uniform_set() {
 			u.append_id(area_light_atlas);
 			uniforms.push_back(u);
 		}
+
+		_add_voxel_occupancy_uniforms(uniforms);
 
 		render_base_uniform_set = RD::get_singleton()->uniform_set_create(uniforms, scene_shader.default_shader_rd, SCENE_UNIFORM_SET);
 	}

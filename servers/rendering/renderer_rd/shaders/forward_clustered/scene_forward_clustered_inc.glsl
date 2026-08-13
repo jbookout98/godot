@@ -309,6 +309,26 @@ layout(set = 0, binding = 18) uniform sampler2D ltc_lut1;
 layout(set = 0, binding = 19) uniform sampler2D ltc_lut2;
 
 layout(set = 0, binding = 20) uniform texture2D area_light_atlas;
+
+// Sparse binary occupancy owned by Voxel Forward. Forward+ binds harmless
+// dummy buffers to preserve the common descriptor layout.
+layout(set = 0, binding = 21, std430) readonly buffer VoxelWorldDirectory {
+	uvec4 entries[];
+}
+voxel_world_directory;
+
+layout(set = 0, binding = 22, std430) readonly buffer VoxelMixedBricks {
+	uint words[];
+}
+voxel_mixed_bricks;
+
+layout(set = 0, binding = 23, std140) uniform VoxelOccupancyData {
+	vec4 world_origin_voxel_size;
+	ivec4 directory_steps;
+	vec4 limits;
+}
+voxel_occupancy_data;
+
 /* Set 1: Render Pass (changes per render pass) */
 
 layout(set = 1, binding = 0, std140) uniform SceneDataBlock {

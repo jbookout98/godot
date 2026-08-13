@@ -1238,6 +1238,12 @@ void main() {
 #ifdef LIGHT_VERTEX_USED
 	vec3 light_vertex = vertex;
 #endif //LIGHT_VERTEX_USED
+#ifdef LIGHTING_VERTEX_USED
+	vec3 lighting_vertex = vertex;
+#endif // LIGHTING_VERTEX_USED
+#ifdef VOXEL_OCCUPANCY_SHADOWS_USED
+	bool voxel_occupancy_shadows = false;
+#endif
 
 	mat3 model_normal_matrix;
 	if (bool(instances.data[draw_call.instance_index].flags & INSTANCE_FLAGS_NON_UNIFORM_SCALE)) {
@@ -1332,12 +1338,14 @@ void main() {
 
 #ifdef LIGHT_VERTEX_USED
 	vertex = light_vertex;
+#endif //LIGHT_VERTEX_USED
+#ifdef LIGHT_VERTEX_USED
 #ifdef USE_MULTIVIEW
 	view = hvec3(-normalize(vertex - eye_offset));
 #else
 	view = hvec3(-normalize(vertex));
 #endif //USE_MULTIVIEW
-#endif //LIGHT_VERTEX_USED
+#endif // LIGHT_VERTEX_USED
 
 #ifdef NORMAL_USED
 	hvec3 geo_normal = normalize(normal);
@@ -2173,7 +2181,13 @@ void main() {
 			break;
 		}
 
-		light_process_omni(light_index, vertex, view, normal, vertex_ddx, vertex_ddy, f0, roughness, metallic, scene_data.taa_frame_count, albedo, alpha, screen_uv, hvec3(1.0),
+		light_process_omni(light_index, vertex,
+#ifdef LIGHTING_VERTEX_USED
+				lighting_vertex,
+#else
+				vertex,
+#endif
+				false, view, normal, vertex_ddx, vertex_ddy, f0, roughness, metallic, scene_data.taa_frame_count, albedo, alpha, screen_uv, hvec3(1.0),
 #ifdef LIGHT_BACKLIGHT_USED
 				backlight,
 #endif
@@ -2205,7 +2219,13 @@ void main() {
 			break;
 		}
 
-		light_process_spot(light_index, vertex, view, normal, vertex_ddx, vertex_ddy, f0, roughness, metallic, scene_data.taa_frame_count, albedo, alpha, screen_uv, hvec3(1.0),
+		light_process_spot(light_index, vertex,
+#ifdef LIGHTING_VERTEX_USED
+				lighting_vertex,
+#else
+				vertex,
+#endif
+				false, view, normal, vertex_ddx, vertex_ddy, f0, roughness, metallic, scene_data.taa_frame_count, albedo, alpha, screen_uv, hvec3(1.0),
 #ifdef LIGHT_BACKLIGHT_USED
 				backlight,
 #endif

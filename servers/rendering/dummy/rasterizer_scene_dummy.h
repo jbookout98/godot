@@ -43,6 +43,8 @@ class RasterizerSceneDummy : public RendererSceneRender {
 public:
 	class GeometryInstanceDummy : public RenderGeometryInstance {
 	public:
+		RID base;
+
 		GeometryInstanceDummy() {}
 
 		virtual void _mark_dirty() override {}
@@ -69,6 +71,7 @@ public:
 
 		virtual Transform3D get_transform() override { return Transform3D(); }
 		virtual AABB get_aabb() override { return AABB(); }
+		virtual RID get_base() const override { return base; }
 
 		virtual void clear_light_instances() override {}
 		virtual void pair_light_instance(const RID p_light_instance, RSE::LightType light_type, uint32_t placement_idx) override {}
@@ -87,6 +90,7 @@ public:
 		ERR_FAIL_COND_V(!((1 << type) & RSE::INSTANCE_GEOMETRY_MASK), nullptr);
 
 		GeometryInstanceDummy *ginstance = geometry_instance_alloc.alloc();
+		ginstance->base = p_base;
 
 		return ginstance;
 	}

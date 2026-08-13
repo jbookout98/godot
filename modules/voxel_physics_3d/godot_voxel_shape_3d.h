@@ -13,6 +13,7 @@ struct VoxelFeatureProxy3D {
 
 class GodotVoxelShape3D : public GodotShape3D {
 	struct PhysicsBrickCache {
+		bool initialized = false;
 		bool uniform_solid = false;
 		uint64_t edge_bits[8] = {};
 		Vector<uint16_t> solid_local_indices;
@@ -32,22 +33,20 @@ class GodotVoxelShape3D : public GodotShape3D {
 	VoxelFeatureProxy3D corner_feature_table[64];
 	GodotBoxShape3D default_cube_feature;
 	GodotSphereShape3D default_corner_feature;
-	Vector<PhysicsBrickCache> brick_caches;
+	mutable Vector<PhysicsBrickCache> brick_caches;
 	int solid_count = 0;
-	int surface_feature_count = 0;
-	int face_feature_count = 0;
-	int edge_feature_count = 0;
-	int corner_feature_count = 0;
 	uint64_t cached_revision = UINT64_MAX;
 	Vector3i cached_dimensions;
-	Vector3 center_of_mass;
-	Vector3 inertia_per_unit_mass;
+	mutable Vector3 center_of_mass;
+	mutable Vector3 inertia_per_unit_mass;
 	real_t occupied_volume = 0.0;
+	mutable bool mass_properties_valid = false;
 
 	void _build_feature_table(GodotShape3D *p_shape, const Vector3 &p_scale, VoxelFeatureProxy3D (&r_table)[64]);
-	void _rebuild_brick_cache(int p_brick_index);
-	void _rebuild_brick_caches(bool p_force_full);
-	void _rebuild_mass_properties();
+	void _invalidate_brick_caches();
+	void _ensure_brick_cache(int p_brick_index) const;
+	void _ensure_all_brick_caches() const;
+	void _rebuild_mass_properties() const;
 	bool _find_next_index(int p_feature, bool p_bounded, const Vector3i &p_from, const Vector3i &p_to, int &r_brick_index, int &r_cursor, int &r_index) const;
 
 public:
@@ -89,7 +88,7 @@ public:
 
 	PhysicsServer3D::ShapeType get_type() const override { return PhysicsServer3D::SHAPE_CUSTOM; }
 	real_t get_volume() const override { return occupied_volume; }
-	Vector3 get_center_of_mass() const override { return center_of_mass; }
+	Vector3 get_center_of_mass() const override;
 	void project_range(const Vector3 &p_normal, const Transform3D &p_transform, real_t &r_min, real_t &r_max) const override;
 	void get_supports(const Vector3 &p_normal, int p_max, Vector3 *r_supports, int &r_amount, FeatureType &r_type) const override;
 	Vector3 get_closest_point_to(const Vector3 &p_point) const override;

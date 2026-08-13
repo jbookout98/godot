@@ -66,6 +66,7 @@ public:
 
 	virtual Transform3D get_transform() = 0;
 	virtual AABB get_aabb() = 0;
+	virtual RID get_base() const = 0;
 
 	virtual void clear_light_instances() = 0;
 	virtual void pair_light_instance(const RID p_light_instance, RSE::LightType light_type, uint32_t placement_idx) = 0;
@@ -153,4 +154,5 @@ public:
 
 	virtual Transform3D get_transform() override;
 	virtual AABB get_aabb() override;
+	virtual RID get_base() const override;
 };

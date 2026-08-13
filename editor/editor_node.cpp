@@ -179,6 +179,7 @@
 #include "servers/navigation_2d/navigation_server_2d.h"
 #include "servers/navigation_3d/navigation_server_3d.h"
 #include "servers/rendering/rendering_device.h"
+#include "servers/rendering/rendering_method.h"
 #include "servers/rendering/rendering_server.h"
 
 #ifdef VULKAN_ENABLED
@@ -6070,6 +6071,8 @@ String EditorNode::_get_system_info() const {
 	// Prettify
 	if (rendering_method == "forward_plus") {
 		rendering_method = "Forward+";
+	} else if (rendering_method == "voxel_forward") {
+		rendering_method = "Voxel Forward";
 	} else if (rendering_method == "mobile") {
 		rendering_method = "Mobile";
 	} else if (rendering_method == "gl_compatibility") {
@@ -7755,7 +7758,8 @@ Vector<Ref<EditorResourceConversionPlugin>> EditorNode::find_resource_conversion
 void EditorNode::_update_renderer_color() {
 	String rendering_method = renderer->get_selected_metadata();
 
-	const Color renderer_normal_color = theme->get_color(rendering_method + "_color", EditorStringName(Editor));
+	const String color_method = RenderingMethod::is_forward_plus_method(rendering_method) ? "forward_plus" : rendering_method;
+	const Color renderer_normal_color = theme->get_color(color_method + "_color", EditorStringName(Editor));
 	const Color mono_color = theme->get_color(SNAME("mono_color"), EditorStringName(Editor));
 
 	renderer->add_theme_color_override(SceneStringName(font_color), renderer_normal_color);
@@ -7788,7 +7792,7 @@ void EditorNode::_renderer_selected(int p_index) {
 		video_restart_dialog->disconnect(SceneStringName(confirmed), callable_mp(this, &EditorNode::_set_renderer_name_save_and_restart));
 	}
 
-	const String mobile_rendering_method = rendering_method == "forward_plus" ? "mobile" : rendering_method;
+	const String mobile_rendering_method = RenderingMethod::is_forward_plus_method(rendering_method) ? "mobile" : rendering_method;
 	const String web_rendering_method = "gl_compatibility";
 	video_restart_dialog->connect(SceneStringName(confirmed), callable_mp(this, &EditorNode::_set_renderer_name_save_and_restart).bind(rendering_method));
 	video_restart_dialog->set_text(
@@ -7802,6 +7806,9 @@ void EditorNode::_renderer_selected(int p_index) {
 String EditorNode::_to_rendering_method_display_name(const String &p_rendering_method) const {
 	if (p_rendering_method == "forward_plus") {
 		return TTR("Forward+");
+	}
+	if (p_rendering_method == "voxel_forward") {
+		return TTR("Voxel Forward");
 	}
 	if (p_rendering_method == "mobile") {
 		return TTR("Mobile");
@@ -7819,9 +7826,9 @@ void EditorNode::_set_renderer_name_save_and_restart(const String &p_rendering_m
 		// Also change the mobile override if changing to a compatible renderer.
 		// This prevents visual discrepancies between desktop and mobile platforms.
 		ProjectSettings::get_singleton()->set("rendering/renderer/rendering_method.mobile", p_rendering_method);
-	} else if (p_rendering_method == "forward_plus") {
+	} else if (RenderingMethod::is_forward_plus_method(p_rendering_method)) {
 		// Use the equivalent mobile renderer. This prevents the renderer from staying
-		// on its old choice if moving from `gl_compatibility` to `forward_plus`.
+		// on its old choice if moving from `gl_compatibility` to a Forward+-family renderer.
 		ProjectSettings::get_singleton()->set("rendering/renderer/rendering_method.mobile", "mobile");
 	}
 
@@ -9103,7 +9110,7 @@ EditorNode::EditorNode() {
 	renderer->set_focus_mode(Control::FOCUS_ACCESSIBILITY);
 	renderer->set_auto_translate_mode(AUTO_TRANSLATE_MODE_DISABLED);
 	renderer->set_tooltip_auto_translate_mode(AUTO_TRANSLATE_MODE_ALWAYS);
-	renderer->set_tooltip_text(TTRC("Choose a renderer.\n\nNotes:\n- On mobile platforms, the Mobile renderer is used if Forward+ is selected here.\n- On the web platform, the Compatibility renderer is always used."));
+	renderer->set_tooltip_text(TTRC("Choose a renderer.\n\nNotes:\n- On mobile platforms, the Mobile renderer is used if Forward+ or Voxel Forward is selected here.\n- On the web platform, the Compatibility renderer is always used."));
 	renderer->set_accessibility_name(TTRC("Renderer"));
 
 	right_menu_hb->add_child(renderer);

@@ -50,6 +50,7 @@ protected:
 	static void _bind_methods();
 
 public:
+	int get_surface_class(const Vector3i &p_position, uint8_t *r_mask = nullptr) const { return _get_surface_class(p_position, r_mask); }
 	VoxelShapeData();
 
 	bool is_inside(const Vector3i &p_position) const;

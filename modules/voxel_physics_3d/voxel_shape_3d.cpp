@@ -1,7 +1,10 @@
 #include "voxel_shape_3d.h"
 
+#include "core/object/callable_mp.h"
+#include "core/object/class_db.h"
 #include "scene/resources/3d/primitive_meshes.h"
-#include "servers/physics_server_3d.h"
+#include "servers/physics_3d/physics_server_3d.h"
+#include "servers/rendering/rendering_server_enums.h"
 
 void VoxelShape3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_voxel_data", "voxel_data"), &VoxelShape3D::set_voxel_data);
@@ -60,17 +63,17 @@ Ref<ArrayMesh> VoxelShape3D::get_debug_arraymesh_faces(const Color &p_modulate) 
 	}
 	const Vector3 size = Vector3(voxel_data->get_dimensions()) * voxel_data->get_voxel_size();
 	Array arrays;
-	arrays.resize(RS::ARRAY_MAX);
+	arrays.resize(RSE::ARRAY_MAX);
 	BoxMesh::create_mesh_array(arrays, size);
-	PackedVector3Array vertices = arrays[RS::ARRAY_VERTEX];
+	PackedVector3Array vertices = arrays[RSE::ARRAY_VERTEX];
 	for (int i = 0; i < vertices.size(); i++) {
 		vertices.set(i, vertices[i] + size * 0.5);
 	}
-	arrays[RS::ARRAY_VERTEX] = vertices;
+	arrays[RSE::ARRAY_VERTEX] = vertices;
 	PackedColorArray colors;
 	colors.resize(vertices.size());
 	colors.fill(p_modulate);
-	arrays[RS::ARRAY_COLOR] = colors;
+	arrays[RSE::ARRAY_COLOR] = colors;
 	Ref<ArrayMesh> mesh;
 	mesh.instantiate();
 	mesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);

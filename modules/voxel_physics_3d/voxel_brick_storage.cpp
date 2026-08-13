@@ -2,6 +2,8 @@
 
 #include "core/error/error_macros.h"
 
+#include <cstring>
+
 namespace {
 
 void _append_u32(PackedByteArray &r_data, uint32_t p_value) {
@@ -94,6 +96,7 @@ void VoxelBrickStorage::_normalize_brick(int p_brick_index) {
 		brick.type = BRICK_EMPTY;
 		brick.uniform_value = 0;
 		brick.mixed_values.clear();
+		brick.coarse_occupancy_4 = 0;
 		return;
 	}
 
@@ -123,6 +126,30 @@ void VoxelBrickStorage::_normalize_brick(int p_brick_index) {
 	brick.type = BRICK_UNIFORM;
 	brick.uniform_value = uniform_value;
 	brick.mixed_values.clear();
+	brick.coarse_occupancy_4 = 0xFF;
+}
+
+void VoxelBrickStorage::_rebuild_coarse_occupancy_4(int p_brick_index) {
+	Brick &brick = bricks.write[p_brick_index];
+	if (brick.type == BRICK_EMPTY) {
+		brick.coarse_occupancy_4 = 0;
+		return;
+	}
+	if (brick.type == BRICK_UNIFORM) {
+		brick.coarse_occupancy_4 = brick.uniform_value != 0 ? 0xFF : 0;
+		return;
+	}
+	uint8_t mask = 0;
+	for (int local = 0; local < BRICK_VOXEL_COUNT; local++) {
+		if (brick.mixed_values[local] == 0) {
+			continue;
+		}
+		const int x = local % BRICK_SIZE;
+		const int y = (local / BRICK_SIZE) % BRICK_SIZE;
+		const int z = local / (BRICK_SIZE * BRICK_SIZE);
+		mask |= uint8_t(1 << ((x >> 2) | ((y >> 2) << 1) | ((z >> 2) << 2)));
+	}
+	brick.coarse_occupancy_4 = mask;
 }
 
 bool VoxelBrickStorage::set_voxel(const Vector3i &p_position, uint8_t p_value) {
@@ -149,6 +176,7 @@ bool VoxelBrickStorage::set_voxel(const Vector3i &p_position, uint8_t p_value) {
 	brick.dirty_flags |= DIRTY_ALL;
 	brick.revision = ++revision;
 	_normalize_brick(brick_index);
+	_rebuild_coarse_occupancy_4(brick_index);
 	return true;
 }
 
@@ -197,6 +225,7 @@ int VoxelBrickStorage::fill_region(const Vector3i &p_position, const Vector3i &p
 						brick.type = BRICK_UNIFORM;
 						brick.uniform_value = p_value;
 						brick.occupied_count = valid_count;
+						brick.coarse_occupancy_4 = 0xFF;
 					}
 					brick.dirty_flags = DIRTY_ALL;
 					brick.revision = ++revision;
@@ -244,6 +273,7 @@ void VoxelBrickStorage::import_dense(const PackedByteArray &p_voxels, const Vect
 		brick.dirty_flags = DIRTY_ALL;
 		brick.revision = revision;
 		_normalize_brick(brick_index);
+		_rebuild_coarse_occupancy_4(brick_index);
 	}
 	revision++;
 }
@@ -329,11 +359,13 @@ bool VoxelBrickStorage::deserialize_sparse(const PackedByteArray &p_data, const 
 			}
 			brick.uniform_value = p_data[cursor++];
 			brick.occupied_count = _get_valid_voxel_count(brick_index_to_position(brick_index));
+			brick.coarse_occupancy_4 = 0xFF;
 		} else if (brick.type == BRICK_MIXED) {
 			if (cursor + BRICK_VOXEL_COUNT > p_data.size()) {
 				return false;
 			}
 			brick.mixed_values.resize(BRICK_VOXEL_COUNT);
+			uint8_t *mixed_write = brick.mixed_values.ptrw();
 			const Vector3i brick_position = brick_index_to_position(brick_index);
 			const Vector3i start = brick_position * BRICK_SIZE;
 			const Vector3i valid_size = (dimensions - start).clamp(Vector3i(), Vector3i(BRICK_SIZE, BRICK_SIZE, BRICK_SIZE));
@@ -345,9 +377,10 @@ bool VoxelBrickStorage::deserialize_sparse(const PackedByteArray &p_data, const 
 				if (x >= valid_size.x || y >= valid_size.y || z >= valid_size.z) {
 					value = 0;
 				}
-				brick.mixed_values.set(i, value);
+				mixed_write[i] = value;
 				brick.occupied_count += value != 0 ? 1 : 0;
 			}
+			_rebuild_coarse_occupancy_4(brick_index);
 		} else {
 			return false;
 		}

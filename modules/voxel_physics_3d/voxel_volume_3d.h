@@ -28,8 +28,14 @@ public:
 private:
 
 	RID procedural_surface;
+	// Stable low-resolution geometry used only by shadow passes. The visible
+	// surface remains the committed DDA shader and never renders this mesh.
+	RID shadow_proxy_mesh;
+	RID shadow_proxy_instance;
+	bool shadow_proxy_has_surface = false;
 	Ref<VoxelShapeData> voxel_data;
-	// Inspector-facing, serializable configuration only.
+	// Shared inspector-facing authored configuration. Several volumes may retain
+	// the same resource and receive its changed notification.
 	Ref<VoxelMaterial> voxel_material;
 	// Private generated material holding Shader and per-volume GPU textures.
 	Ref<VoxelMaterial> runtime_material;
@@ -50,12 +56,20 @@ private:
 	int neighbor_mask = 0;
 	Vector3i atlas_brick_dimensions = Vector3i(1, 1, 1);
 	uint64_t rendered_revision = UINT64_MAX;
+	Vector3i voxel_forward_dirty_position;
+	Vector3i voxel_forward_dirty_size;
+	bool voxel_forward_dirty_valid = false;
+	// VoxelShapeData emits voxels_changed followed by Resource::changed for the
+	// same edit batch. The dedicated callback already performs the complete
+	// render refresh, so the following generic notification must be ignored.
+	bool voxel_change_notification_pending = false;
 	StreamingMode streaming_mode = STREAMING_AUTOMATIC;
 	real_t streaming_distance = 0.0;
 	// Automatic volumes start without GPU resources. The streaming manager
 	// selects the initial resident set after the complete scene and camera have
 	// entered the tree, avoiding load-time uploads that are immediately freed.
 	bool streaming_resident = false;
+	bool render_resources_built = false;
 	Ref<Texture2D> fallback_palette;
 	Ref<Texture2D> fallback_material;
 	AABB local_aabb;
@@ -66,6 +80,9 @@ private:
 	void _rebuild_volume_textures();
 	void _rebuild_runtime_material();
 	void _rebuild_procedural_surface();
+	void _rebuild_shadow_proxy();
+	void _sync_shadow_proxy_instance();
+	void _sync_voxel_forward_volume(bool p_remove = false);
 	void _update_material_bindings();
 	Ref<ImageTexture3D> _create_texture_3d(
 			const PackedByteArray &p_bytes,
@@ -73,6 +90,7 @@ private:
 			Image::Format p_format,
 			int p_bytes_per_pixel) const;
 	void _ensure_fallback_textures();
+	bool _uses_voxel_forward_shadow_mask() const;
 
 protected:
 	static void _bind_methods();

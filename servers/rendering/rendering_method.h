@@ -47,6 +47,11 @@ class RenderSceneBuffers;
 
 class RenderingMethod {
 public:
+	static bool is_forward_plus_method(const String &p_rendering_method);
+	static bool is_current_forward_plus_method();
+	static bool is_voxel_forward_method(const String &p_rendering_method);
+	static bool is_current_voxel_forward_method();
+
 	virtual RID camera_allocate() = 0;
 	virtual void camera_initialize(RID p_rid) = 0;
 

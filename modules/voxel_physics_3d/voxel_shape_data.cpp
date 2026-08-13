@@ -1,6 +1,7 @@
 #include "voxel_shape_data.h"
 
 #include "core/error/error_macros.h"
+#include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
 
 namespace {
@@ -107,7 +108,7 @@ void VoxelShapeData::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::PACKED_BYTE_ARRAY, "corner_masks", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NONE), "set_corner_masks", "get_corner_masks");
 	ADD_PROPERTY(PropertyInfo(Variant::PACKED_BYTE_ARRAY, "voxel_data", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NONE), "set_voxel_data", "get_voxel_data");
 
-	ADD_GROUP("Visualization", "");
+	ADD_GROUP("Legacy Material Fallback", "");
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "palette_texture", PROPERTY_HINT_RESOURCE_TYPE, "Texture2D"), "set_palette_texture", "get_palette_texture");
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "material_texture", PROPERTY_HINT_RESOURCE_TYPE, "Texture2D"), "set_material_texture", "get_material_texture");
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "metallic_texture", PROPERTY_HINT_RESOURCE_TYPE, "Texture2D"), "set_metallic_texture", "get_metallic_texture");
@@ -115,7 +116,7 @@ void VoxelShapeData::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "specularity_texture", PROPERTY_HINT_RESOURCE_TYPE, "Texture2D"), "set_specularity_texture", "get_specularity_texture");
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "emission_texture", PROPERTY_HINT_RESOURCE_TYPE, "Texture2D"), "set_emission_texture", "get_emission_texture");
 
-	ADD_GROUP("Feature Shapes", "");
+	ADD_GROUP("Collision Feature Overrides", "");
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "face_shape", PROPERTY_HINT_RESOURCE_TYPE, "Shape3D"), "set_face_shape", "get_face_shape");
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "edge_shape", PROPERTY_HINT_RESOURCE_TYPE, "Shape3D"), "set_edge_shape", "get_edge_shape");
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "corner_shape", PROPERTY_HINT_RESOURCE_TYPE, "Shape3D"), "set_corner_shape", "get_corner_shape");

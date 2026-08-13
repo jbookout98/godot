@@ -785,6 +785,10 @@ private:
 
 protected:
 	/* setup */
+	// Voxel Forward overrides these otherwise-dummy bindings with its sparse
+	// world occupancy table. Keeping the layout present in Forward+ allows the
+	// shared clustered shader to compile without changing normal materials.
+	virtual void _add_voxel_occupancy_uniforms(Vector<RD::Uniform> &r_uniforms);
 
 	virtual RID _render_buffers_get_normal_texture(Ref<RenderSceneBuffersRD> p_render_buffers) override;
 	virtual RID _render_buffers_get_velocity_texture(Ref<RenderSceneBuffersRD> p_render_buffers) override;
@@ -798,6 +802,9 @@ protected:
 	virtual void sub_surface_scattering_set_scale(float p_scale, float p_depth_scale) override;
 
 	/* Rendering */
+	virtual bool _render_scene_custom_uses_resolved_depth() const { return false; }
+	virtual void _render_scene_custom_pre_opaque(RenderDataRD *p_render_data, bool p_depth_prepass) {}
+	virtual void _render_scene_custom_opaque(RenderDataRD *p_render_data, RID p_framebuffer, uint32_t p_color_pass_flags, uint32_t p_color_attachment_count, bool p_depth_prepass) {}
 
 	virtual void _render_scene(RenderDataRD *p_render_data, const Color &p_default_bg_color) override;
 	virtual void _render_buffers_debug_draw(const RenderDataRD *p_render_data) override;

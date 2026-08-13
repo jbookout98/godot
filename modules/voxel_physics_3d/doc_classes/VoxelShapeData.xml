@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <class name="VoxelShapeData" inherits="Resource" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
 	<brief_description>
-		Sparse voxel occupancy, palette, rendering, and collision-feature data.
+		Sparse voxel occupancy, legacy material fallbacks, and collision-feature overrides.
 	</brief_description>
 	<description>
 		Stores an editable 3D grid as sparse 8 × 8 × 8 bricks. Palette index [code]0[/code] is empty and indices [code]1..255[/code] are solid. The resource can be shared by [VoxelVolume3D] rendering and [VoxelShape3D] collision.
+		New projects should place palette material textures on [VoxelMaterial]. Texture properties here remain as import and scene-compatibility fallbacks.
 		Coordinates are zero-based. Linear indices use [code]x + y * dimensions.x + z * dimensions.x * dimensions.y[/code]. Editing methods emit [signal voxels_changed] and increment the revision when a transaction is flushed.
-		Surface feature classes and six-bit exposure masks are derived from occupied neighbors. Mask bits represent [code]+X, -X, +Y, -Y, +Z, -Z[/code] in that order.
+		Surface feature classes and six-bit exposure masks are derived from occupied neighbors. Mask bits represent [code]+X, -X, +Y, -Y, +Z, -Z[/code] in that order. Empty feature-shape properties use built-in collision proxies: boxes for faces and edges, and a sphere for corners.
 	</description>
 	<tutorials>
 	</tutorials>
@@ -105,16 +106,16 @@
 	</methods>
 	<members>
 		<member name="corner_masks" type="PackedByteArray" setter="set_corner_masks" getter="get_corner_masks">Legacy non-serialized dense corner exposure masks. Topology is derived on read.</member>
-		<member name="corner_shape" type="Shape3D" setter="set_corner_shape" getter="get_corner_shape">Optional physics proxy for derived corner features.</member>
+		<member name="corner_shape" type="Shape3D" setter="set_corner_shape" getter="get_corner_shape">Optional override for derived corner features. When empty, a built-in sphere proxy is used.</member>
 		<member name="corner_shape_scale" type="Vector3" setter="set_corner_shape_scale" getter="get_corner_shape_scale" default="Vector3(1, 1, 1)">Positive scale applied to corner proxies.</member>
 		<member name="corner_voxels" type="PackedByteArray" setter="set_corner_voxels" getter="get_corner_voxels">Legacy non-serialized dense corner classification.</member>
 		<member name="dimensions" type="Vector3i" setter="set_dimensions" getter="get_dimensions" default="Vector3i(1, 1, 1)">Positive voxel grid dimensions. Changing this clears existing contents.</member>
 		<member name="edge_masks" type="PackedByteArray" setter="set_edge_masks" getter="get_edge_masks">Legacy non-serialized dense edge exposure masks.</member>
-		<member name="edge_shape" type="Shape3D" setter="set_edge_shape" getter="get_edge_shape">Optional physics proxy for derived edge features.</member>
+		<member name="edge_shape" type="Shape3D" setter="set_edge_shape" getter="get_edge_shape">Optional override for derived edge features. When empty, a built-in box proxy is used.</member>
 		<member name="edge_shape_scale" type="Vector3" setter="set_edge_shape_scale" getter="get_edge_shape_scale" default="Vector3(1, 1, 1)">Positive scale applied to edge proxies.</member>
 		<member name="edge_voxels" type="PackedByteArray" setter="set_edge_voxels" getter="get_edge_voxels">Legacy non-serialized dense edge classification.</member>
 		<member name="face_masks" type="PackedByteArray" setter="set_face_masks" getter="get_face_masks">Legacy non-serialized dense face exposure masks.</member>
-		<member name="face_shape" type="Shape3D" setter="set_face_shape" getter="get_face_shape">Optional physics proxy for derived face features.</member>
+		<member name="face_shape" type="Shape3D" setter="set_face_shape" getter="get_face_shape">Optional override for derived face features. When empty, a built-in box proxy is used.</member>
 		<member name="face_shape_scale" type="Vector3" setter="set_face_shape_scale" getter="get_face_shape_scale" default="Vector3(1, 1, 1)">Positive scale applied to face proxies.</member>
 		<member name="face_voxels" type="PackedByteArray" setter="set_face_voxels" getter="get_face_voxels">Legacy non-serialized dense face classification.</member>
 		<member name="material_texture" type="Texture2D" setter="set_material_texture" getter="get_material_texture">Material lookup texture: roughness in red, metallic in green, emission strength in blue.</member>

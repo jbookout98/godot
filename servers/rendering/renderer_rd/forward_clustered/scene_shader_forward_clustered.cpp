@@ -779,6 +779,8 @@ void SceneShaderForwardClustered::init(const String p_defines) {
 		actions.renames["CUSTOM2"] = "custom2_attrib";
 		actions.renames["CUSTOM3"] = "custom3_attrib";
 		actions.renames["LIGHT_VERTEX"] = "light_vertex";
+		actions.renames["LIGHTING_VERTEX"] = "lighting_vertex";
+		actions.renames["VOXEL_OCCUPANCY_SHADOWS"] = "voxel_occupancy_shadows";
 
 		actions.renames["NODE_POSITION_WORLD"] = "read_model_matrix[3].xyz";
 		actions.renames["CAMERA_POSITION_WORLD"] = "inv_view_matrix[3].xyz";
@@ -835,6 +837,9 @@ void SceneShaderForwardClustered::init(const String p_defines) {
 		actions.usage_defines["LIGHT_AREA_DIFFUSE_MULTIPLIER"] = "#define AREA_LIGHT_CODE_USED\n";
 		actions.usage_defines["LIGHT_AREA_SPECULAR_MULTIPLIER"] = "@LIGHT_AREA_DIFFUSE_MULTIPLIER";
 		actions.usage_defines["LIGHT_IS_AREA"] = "@LIGHT_AREA_DIFFUSE_MULTIPLIER";
+		actions.usage_defines["LIGHTING_VERTEX"] = "#define LIGHTING_VERTEX_USED\n";
+		actions.usage_defines["VOXEL_OCCUPANCY_SHADOWS"] = "#define VOXEL_OCCUPANCY_SHADOWS_USED\n";
+		actions.usage_defines["PREMUL_ALPHA_FACTOR"] = "#define PREMUL_ALPHA_USED\n";
 
 		actions.usage_defines["ALPHA_SCISSOR_THRESHOLD"] = "#define ALPHA_SCISSOR_USED\n";
 		actions.usage_defines["ALPHA_HASH_SCALE"] = "#define ALPHA_HASH_USED\n";

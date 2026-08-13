@@ -4,22 +4,61 @@
 		Rendering configuration for a [VoxelVolume3D].
 	</brief_description>
 	<description>
-		Controls how a [VoxelVolume3D] shades its ray-marched voxels. The resource stores authored configuration only. Each volume creates a private runtime copy containing the generated shader and its volume-specific 3D textures.
-		The voxel palette and per-entry physical material values are supplied by the palette-indexed textures on [VoxelShapeData].
+		Controls how a [VoxelVolume3D] shades its ray-marched voxels. The same resource can be assigned to multiple volumes; editing it updates every volume that references it. Each volume keeps only its generated shader and volume-specific GPU textures private.
+		Texture inputs are palette lookup textures rather than UV-mapped mesh textures: each stored voxel ID selects one texel. When a texture is empty, the corresponding legacy texture on [VoxelShapeData] is used for compatibility.
 	</description>
 	<tutorials>
 	</tutorials>
 	<methods>
+		<method name="get_albedo_modulate" qualifiers="const">
+			<return type="Color" />
+			<description>Returns the color multiplied with every palette entry.</description>
+		</method>
 		<method name="get_emission_energy" qualifiers="const">
 			<return type="float" />
 			<description>
 				Returns the multiplier applied to emission values from the voxel material texture.
 			</description>
 		</method>
+		<method name="get_metallic_multiplier" qualifiers="const">
+			<return type="float" />
+			<description>Returns the multiplier applied to palette metallic values.</description>
+		</method>
+		<method name="get_outline_color" qualifiers="const">
+			<return type="Color" />
+			<description>Returns the color of voxel normal-discontinuity outlines.</description>
+		</method>
+		<method name="get_outline_width" qualifiers="const">
+			<return type="float" />
+			<description>Returns the approximate outline width in screen pixels.</description>
+		</method>
+		<method name="get_roughness_multiplier" qualifiers="const">
+			<return type="float" />
+			<description>Returns the multiplier applied to palette roughness values.</description>
+		</method>
+		<method name="get_specularity_multiplier" qualifiers="const">
+			<return type="float" />
+			<description>Returns the multiplier applied to palette specularity values.</description>
+		</method>
+		<method name="is_outline_enabled" qualifiers="const">
+			<return type="bool" />
+			<description>Returns whether normal-discontinuity outlines are enabled.</description>
+		</method>
+		<method name="set_albedo_modulate">
+			<return type="void" />
+			<param index="0" name="color" type="Color" />
+			<description>Sets the color multiplied with every palette entry.</description>
+		</method>
 		<method name="get_shading_mode" qualifiers="const">
 			<return type="int" enum="VoxelMaterial.ShadingMode" />
 			<description>
 				Returns the active voxel shading mode.
+			</description>
+		</method>
+		<method name="get_lighting_position_mode" qualifiers="const">
+			<return type="int" enum="VoxelMaterial.LightingPositionMode" />
+			<description>
+				Returns whether direct lighting uses the exact surface hit or the center of the voxel face.
 			</description>
 		</method>
 		<method name="set_emission_energy">
@@ -36,13 +75,92 @@
 				Selects unlit or physically based shading. Changing the mode rebuilds an existing runtime shader.
 			</description>
 		</method>
+		<method name="set_lighting_position_mode">
+			<return type="void" />
+			<param index="0" name="mode" type="int" enum="VoxelMaterial.LightingPositionMode" />
+			<description>
+				Selects exact-hit lighting or intentionally quantized voxel-face lighting. Visibility and shadow rays always originate at the exact surface hit.
+			</description>
+		</method>
+		<method name="set_metallic_multiplier">
+			<return type="void" />
+			<param index="0" name="multiplier" type="float" />
+			<description>Sets the non-negative palette metallic multiplier.</description>
+		</method>
+		<method name="set_outline_color">
+			<return type="void" />
+			<param index="0" name="color" type="Color" />
+			<description>Sets the outline color and opacity.</description>
+		</method>
+		<method name="set_outline_enabled">
+			<return type="void" />
+			<param index="0" name="enabled" type="bool" />
+			<description>Enables outlines where voxel surface normals change or a surface ends.</description>
+		</method>
+		<method name="set_outline_width">
+			<return type="void" />
+			<param index="0" name="width" type="float" />
+			<description>Sets the approximate outline width in screen pixels.</description>
+		</method>
+		<method name="set_roughness_multiplier">
+			<return type="void" />
+			<param index="0" name="multiplier" type="float" />
+			<description>Sets the non-negative palette roughness multiplier.</description>
+		</method>
+		<method name="set_specularity_multiplier">
+			<return type="void" />
+			<param index="0" name="multiplier" type="float" />
+			<description>Sets the non-negative palette specularity multiplier.</description>
+		</method>
 	</methods>
 	<members>
+		<member name="albedo_modulate" type="Color" setter="set_albedo_modulate" getter="get_albedo_modulate" default="Color(1, 1, 1, 1)">
+			Color multiplied with every palette albedo. This changes the whole material without altering [VoxelShapeData].
+		</member>
+		<member name="emission_texture" type="Texture2D" setter="set_emission_texture" getter="get_emission_texture">
+			Palette-indexed emission lookup.
+		</member>
 		<member name="emission_energy" type="float" setter="set_emission_energy" getter="get_emission_energy" default="1.0">
 			Multiplier applied to the emission channel of [member VoxelShapeData.material_texture]. Values below zero are clamped to zero.
 		</member>
 		<member name="shading_mode" type="int" setter="set_shading_mode" getter="get_shading_mode" enum="VoxelMaterial.ShadingMode" default="1">
 			Determines whether the generated voxel shader is unlit or participates in PBR lighting.
+		</member>
+		<member name="lighting_position_mode" type="int" setter="set_lighting_position_mode" getter="get_lighting_position_mode" enum="VoxelMaterial.LightingPositionMode" default="1">
+			Controls positional quantization for direct lighting. Voxel face center is the default and gives every pixel on one voxel face the same direct-light sample. Exact hit retains flat voxel normals but allows lighting intensity to vary across the face.
+		</member>
+		<member name="material_texture" type="Texture2D" setter="set_material_texture" getter="get_material_texture">
+			Combined palette material lookup: roughness in red, metallic in green, and emission in blue.
+		</member>
+		<member name="metallic_multiplier" type="float" setter="set_metallic_multiplier" getter="get_metallic_multiplier" default="1.0">
+			Multiplier applied to palette-indexed metallic values.
+		</member>
+		<member name="metallic_texture" type="Texture2D" setter="set_metallic_texture" getter="get_metallic_texture">
+			Palette-indexed metallic lookup. When present, this overrides the combined material texture's metallic channel.
+		</member>
+		<member name="outline_color" type="Color" setter="set_outline_color" getter="get_outline_color" default="Color(0, 0, 0, 1)">
+			Color and opacity of voxel normal-discontinuity outlines.
+		</member>
+		<member name="outline_enabled" type="bool" setter="set_outline_enabled" getter="is_outline_enabled" default="false">
+			Draws outlines at silhouettes and where neighboring voxel faces turn. Coplanar occupied voxels are not outlined, so this does not add a grid over flat surfaces.
+		</member>
+		<member name="outline_width" type="float" setter="set_outline_width" getter="get_outline_width" default="1.0">
+			Approximate outline width in screen pixels.
+		</member>
+		<member name="palette_texture" type="Texture2D" setter="set_palette_texture" getter="get_palette_texture">
+			Palette-indexed albedo lookup. Voxel ID [code]n[/code] selects texel [code]n[/code].
+		</member>
+		<member name="roughness_multiplier" type="float" setter="set_roughness_multiplier" getter="get_roughness_multiplier" default="1.0">
+			Multiplier applied to palette-indexed roughness values.
+		</member>
+		<member name="specularity_multiplier" type="float" setter="set_specularity_multiplier" getter="get_specularity_multiplier" default="1.0">
+			Multiplier applied to palette-indexed specularity values.
+		</member>
+		<member name="specularity_texture" type="Texture2D" setter="set_specularity_texture" getter="get_specularity_texture">
+			Palette-indexed specularity lookup. Roughness is derived from its inverse when supplied.
+		</member>
+		<member name="transparency_texture" type="Texture2D" setter="set_transparency_texture" getter="get_transparency_texture">
+			Palette-indexed transparency lookup.
 		</member>
 	</members>
 	<constants>
@@ -51,6 +169,12 @@
 		</constant>
 		<constant name="SHADING_MODE_PBR" value="1" enum="ShadingMode">
 			Uses scene lighting with palette albedo and palette-indexed specularity, roughness, metallic, transparency, and emission values.
+		</constant>
+		<constant name="LIGHTING_POSITION_EXACT_HIT" value="0" enum="LightingPositionMode">
+			Evaluates light direction and attenuation at the exact visible surface hit while retaining the flat voxel face normal.
+		</constant>
+		<constant name="LIGHTING_POSITION_VOXEL_FACE_CENTER" value="1" enum="LightingPositionMode">
+			Evaluates direct lighting at the voxel face center for a deliberately stepped, block-locked appearance. Shadows still use the exact surface hit.
 		</constant>
 	</constants>
 </class>

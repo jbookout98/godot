@@ -463,7 +463,7 @@ half get_omni_attenuation(float distance, float inv_range, float decay) {
 	return half(nd * pow(max(distance, 0.0001), -decay));
 }
 
-void light_process_omni(uint idx, vec3 vertex, hvec3 eye_vec, hvec3 normal, vec3 vertex_ddx, vec3 vertex_ddy, hvec3 f0, half roughness, half metallic, float taa_frame_count, hvec3 albedo, inout half alpha, vec2 screen_uv, hvec3 energy_compensation,
+void light_process_omni(uint idx, vec3 vertex, vec3 lighting_vertex, bool use_voxel_occupancy_shadow, hvec3 eye_vec, hvec3 normal, vec3 vertex_ddx, vec3 vertex_ddy, hvec3 f0, half roughness, half metallic, float taa_frame_count, hvec3 albedo, inout half alpha, vec2 screen_uv, hvec3 energy_compensation,
 #ifdef LIGHT_BACKLIGHT_USED
 		hvec3 backlight,
 #endif
@@ -484,7 +484,7 @@ void light_process_omni(uint idx, vec3 vertex, hvec3 eye_vec, hvec3 normal, vec3
 		inout hvec3 diffuse_light, inout hvec3 specular_light) {
 
 	// Omni light attenuation.
-	vec3 light_rel_vec = omni_lights.data[idx].position - vertex;
+	vec3 light_rel_vec = omni_lights.data[idx].position - lighting_vertex;
 	float light_length = length(light_rel_vec);
 	half omni_attenuation = get_omni_attenuation(light_length, omni_lights.data[idx].inv_radius, omni_lights.data[idx].attenuation);
 
@@ -497,6 +497,7 @@ void light_process_omni(uint idx, vec3 vertex, hvec3 eye_vec, hvec3 normal, vec3
 	}
 
 	half shadow = half(1.0);
+#if !defined(VOXEL_OCCUPANCY_SHADOWS_USED) || !defined(VOXEL_OCCUPANCY_AVAILABLE)
 #ifndef SHADOWS_DISABLED
 	// Omni light shadow.
 	if (omni_attenuation > HALF_FLT_MIN && omni_lights.data[idx].shadow_opacity > 0.001) {
@@ -627,6 +628,17 @@ void light_process_omni(uint idx, vec3 vertex, hvec3 eye_vec, hvec3 normal, vec3
 		}
 	}
 #endif
+#elif defined(VOXEL_OCCUPANCY_AVAILABLE)
+	if (use_voxel_occupancy_shadow && omni_attenuation > HALF_FLT_MIN && omni_lights.data[idx].shadow_opacity > 0.001) {
+		// Use the same representative point as direct lighting. For voxel-face
+		// mode this makes visibility constant across the complete receiver face;
+		// exact-hit mode passes vertex as lighting_vertex and remains per-pixel.
+		vec3 shadow_light_vector = omni_lights.data[idx].position - lighting_vertex;
+		float shadow_light_distance = length(shadow_light_vector);
+		float occupancy_visibility = voxel_occupancy_local_shadow(lighting_vertex, vec3(normal), shadow_light_vector / max(shadow_light_distance, 0.0001), shadow_light_distance);
+		shadow = half(mix(1.0, occupancy_visibility, omni_lights.data[idx].shadow_opacity));
+	}
+#endif
 
 	vec3 color = omni_lights.data[idx].color;
 
@@ -668,7 +680,7 @@ void light_process_omni(uint idx, vec3 vertex, hvec3 eye_vec, hvec3 normal, vec3
 #endif // LIGHT_TRANSMITTANCE_USED
 
 	if (sc_use_light_projector() && omni_lights.data[idx].projector_rect != vec4(0.0)) {
-		vec3 local_v = (omni_lights.data[idx].shadow_matrix * vec4(vertex, 1.0)).xyz;
+		vec3 local_v = (omni_lights.data[idx].shadow_matrix * vec4(lighting_vertex, 1.0)).xyz;
 		local_v = normalize(local_v);
 
 		vec4 atlas_rect = omni_lights.data[idx].projector_rect;
@@ -691,7 +703,7 @@ void light_process_omni(uint idx, vec3 vertex, hvec3 eye_vec, hvec3 normal, vec3
 			vec2 proj_uv_ddx;
 			vec2 proj_uv_ddy;
 			{
-				vec3 local_v_ddx = (omni_lights.data[idx].shadow_matrix * vec4(vertex + vertex_ddx, 1.0)).xyz;
+				vec3 local_v_ddx = (omni_lights.data[idx].shadow_matrix * vec4(lighting_vertex + vertex_ddx, 1.0)).xyz;
 				local_v_ddx = normalize(local_v_ddx);
 
 				if (local_v_ddx.z >= 0.0) {
@@ -705,7 +717,7 @@ void light_process_omni(uint idx, vec3 vertex, hvec3 eye_vec, hvec3 normal, vec3
 
 				proj_uv_ddx = local_v_ddx.xy * atlas_rect.zw - proj_uv;
 
-				vec3 local_v_ddy = (omni_lights.data[idx].shadow_matrix * vec4(vertex + vertex_ddy, 1.0)).xyz;
+				vec3 local_v_ddy = (omni_lights.data[idx].shadow_matrix * vec4(lighting_vertex + vertex_ddy, 1.0)).xyz;
 				local_v_ddy = normalize(local_v_ddy);
 
 				if (local_v_ddy.z >= 0.0) {
@@ -764,7 +776,7 @@ vec2 normal_to_panorama(vec3 n) {
 	return panorama_coords;
 }
 
-void light_process_spot(uint idx, vec3 vertex, hvec3 eye_vec, hvec3 normal, vec3 vertex_ddx, vec3 vertex_ddy, hvec3 f0, half roughness, half metallic, float taa_frame_count, hvec3 albedo, inout half alpha, vec2 screen_uv, hvec3 energy_compensation,
+void light_process_spot(uint idx, vec3 vertex, vec3 lighting_vertex, bool use_voxel_occupancy_shadow, hvec3 eye_vec, hvec3 normal, vec3 vertex_ddx, vec3 vertex_ddy, hvec3 f0, half roughness, half metallic, float taa_frame_count, hvec3 albedo, inout half alpha, vec2 screen_uv, hvec3 energy_compensation,
 #ifdef LIGHT_BACKLIGHT_USED
 		hvec3 backlight,
 #endif
@@ -786,7 +798,7 @@ void light_process_spot(uint idx, vec3 vertex, hvec3 eye_vec, hvec3 normal, vec3
 		inout hvec3 specular_light) {
 
 	// Spot light attenuation.
-	vec3 light_rel_vec = spot_lights.data[idx].position - vertex;
+	vec3 light_rel_vec = spot_lights.data[idx].position - lighting_vertex;
 	float light_length = length(light_rel_vec);
 	hvec3 light_rel_vec_norm = hvec3(light_rel_vec / light_length);
 	half spot_attenuation = get_omni_attenuation(light_length, spot_lights.data[idx].inv_radius, spot_lights.data[idx].attenuation);
@@ -807,6 +819,7 @@ void light_process_spot(uint idx, vec3 vertex, hvec3 eye_vec, hvec3 normal, vec3
 	}
 
 	half shadow = half(1.0);
+#if !defined(VOXEL_OCCUPANCY_SHADOWS_USED) || !defined(VOXEL_OCCUPANCY_AVAILABLE)
 #ifndef SHADOWS_DISABLED
 	// Spot light shadow.
 	if (spot_attenuation > HALF_FLT_MIN && spot_lights.data[idx].shadow_opacity > 0.001) {
@@ -881,6 +894,14 @@ void light_process_spot(uint idx, vec3 vertex, hvec3 eye_vec, hvec3 normal, vec3
 		}
 	}
 #endif // SHADOWS_DISABLED
+#elif defined(VOXEL_OCCUPANCY_AVAILABLE)
+	if (use_voxel_occupancy_shadow && spot_attenuation > HALF_FLT_MIN && spot_lights.data[idx].shadow_opacity > 0.001) {
+		vec3 shadow_light_vector = spot_lights.data[idx].position - lighting_vertex;
+		float shadow_light_distance = length(shadow_light_vector);
+		float occupancy_visibility = voxel_occupancy_local_shadow(lighting_vertex, vec3(normal), shadow_light_vector / max(shadow_light_distance, 0.0001), shadow_light_distance);
+		shadow = half(mix(1.0, occupancy_visibility, spot_lights.data[idx].shadow_opacity));
+	}
+#endif
 
 	vec3 color = spot_lights.data[idx].color;
 
@@ -908,18 +929,18 @@ void light_process_spot(uint idx, vec3 vertex, hvec3 eye_vec, hvec3 normal, vec3
 #endif // LIGHT_TRANSMITTANCE_USED
 
 	if (sc_use_light_projector() && spot_lights.data[idx].projector_rect != vec4(0.0)) {
-		vec4 splane = (spot_lights.data[idx].shadow_matrix * vec4(vertex, 1.0));
+		vec4 splane = (spot_lights.data[idx].shadow_matrix * vec4(lighting_vertex, 1.0));
 		splane /= splane.w;
 
 		vec2 proj_uv = splane.xy * spot_lights.data[idx].projector_rect.zw;
 
 		if (sc_projector_use_mipmaps()) {
 			//ensure we have proper mipmaps
-			vec4 splane_ddx = (spot_lights.data[idx].shadow_matrix * vec4(vertex + vertex_ddx, 1.0));
+			vec4 splane_ddx = (spot_lights.data[idx].shadow_matrix * vec4(lighting_vertex + vertex_ddx, 1.0));
 			splane_ddx /= splane_ddx.w;
 			vec2 proj_uv_ddx = splane_ddx.xy * spot_lights.data[idx].projector_rect.zw - proj_uv;
 
-			vec4 splane_ddy = (spot_lights.data[idx].shadow_matrix * vec4(vertex + vertex_ddy, 1.0));
+			vec4 splane_ddy = (spot_lights.data[idx].shadow_matrix * vec4(lighting_vertex + vertex_ddy, 1.0));
 			splane_ddy /= splane_ddy.w;
 			vec2 proj_uv_ddy = splane_ddy.xy * spot_lights.data[idx].projector_rect.zw - proj_uv;
 

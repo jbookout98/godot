@@ -1,8 +1,42 @@
 #include "voxel_volume_3d.h"
 
+#include "core/config/project_settings.h"
+#include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
-#include "servers/rendering_server.h"
+#include "scene/resources/3d/world_3d.h"
+#include "servers/rendering/rendering_method.h"
+#include "servers/rendering/renderer_rd/voxel_forward/voxel_forward_volume_storage.h"
+#include "servers/rendering/rendering_server.h"
+#include "servers/rendering/rendering_server_types.h"
 #include "voxel_volume_streaming_manager.h"
+
+static bool _uses_occupancy_shadows() {
+	return RenderingMethod::is_current_voxel_forward_method() &&
+			bool(GLOBAL_GET("rendering/voxel_volume/occupancy_shadows/enabled"));
+}
+
+static bool _uses_shadow_proxy() {
+	return !RenderingMethod::is_current_voxel_forward_method() &&
+			bool(GLOBAL_GET("rendering/voxel_volume/shadow_proxy/enabled"));
+}
+
+bool VoxelVolume3D::_uses_voxel_forward_shadow_mask() const {
+	if (!RenderingMethod::is_current_voxel_forward_method() ||
+			!bool(GLOBAL_GET("rendering/voxel_forward/shadow_mask/enabled")) ||
+			!bool(GLOBAL_GET("rendering/driver/depth_prepass/enable"))) {
+		return false;
+	}
+	const Basis basis = (is_inside_tree() ? get_global_transform() : get_transform()).basis;
+	const Vector3 axis_x = basis.get_column(0);
+	const Vector3 axis_y = basis.get_column(1);
+	const Vector3 axis_z = basis.get_column(2);
+	const float scale = axis_x.length();
+	return scale > 0.0001f &&
+			Math::is_equal_approx(axis_y.length(), scale) && Math::is_equal_approx(axis_z.length(), scale) &&
+			axis_x.normalized().is_equal_approx(Vector3(1, 0, 0)) &&
+			axis_y.normalized().is_equal_approx(Vector3(0, 1, 0)) &&
+			axis_z.normalized().is_equal_approx(Vector3(0, 0, 1));
+}
 
 void VoxelVolume3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_voxel_data", "data"), &VoxelVolume3D::set_voxel_data);
@@ -52,9 +86,7 @@ Ref<ImageTexture3D> VoxelVolume3D::_create_texture_3d(
 	for (int z = 0; z < p_dimensions.z; z++) {
 		PackedByteArray slice;
 		slice.resize(slice_size);
-		for (int i = 0; i < slice_size; i++) {
-			slice.set(i, p_bytes[z * slice_size + i]);
-		}
+		std::memcpy(slice.ptrw(), p_bytes.ptr() + z * slice_size, slice_size);
 		slices.set(z, Image::create_from_data(
 				p_dimensions.x, p_dimensions.y, false, p_format, slice));
 	}
@@ -94,16 +126,31 @@ void VoxelVolume3D::_ensure_fallback_textures() {
 }
 
 void VoxelVolume3D::_rebuild_volume_textures() {
-	mixed_brick_atlas.unref();
-	brick_directory_texture.unref();
+	local_aabb = voxel_data.is_valid() ?
+			AABB(Vector3(), Vector3(voxel_data->get_dimensions()) * voxel_data->get_voxel_size()) : AABB();
 	if (!streaming_resident) {
-		RenderingServer::get_singleton()->mesh_clear(procedural_surface);
+		_sync_voxel_forward_volume(true);
+		if (render_resources_built) {
+			mixed_brick_atlas.unref();
+			brick_directory_texture.unref();
+			neighbor_face_texture.unref();
+			RenderingServer::get_singleton()->mesh_clear(procedural_surface);
+			render_resources_built = false;
+		}
+		_rebuild_shadow_proxy();
 		return;
 	}
+	if (runtime_material.is_null()) {
+		_rebuild_runtime_material();
+	}
+	mixed_brick_atlas.unref();
+	brick_directory_texture.unref();
 	if (voxel_data.is_null()) {
+		_sync_voxel_forward_volume(true);
 		rendered_revision = UINT64_MAX;
-		local_aabb = AABB();
+		render_resources_built = true;
 		_rebuild_procedural_surface();
+		_rebuild_shadow_proxy();
 		return;
 	}
 
@@ -127,6 +174,8 @@ void VoxelVolume3D::_rebuild_volume_textures() {
 	PackedByteArray directory_bytes;
 	directory_bytes.resize(storage.get_brick_count() * 4);
 	directory_bytes.fill(0);
+	uint8_t *atlas_write = atlas_bytes.ptrw();
+	uint8_t *directory_write = directory_bytes.ptrw();
 
 	int mixed_slot = 0;
 	for (int brick_index = 0; brick_index < storage.get_brick_count(); brick_index++) {
@@ -134,7 +183,7 @@ void VoxelVolume3D::_rebuild_volume_textures() {
 		uint32_t directory_code = 0;
 		if (brick.type == VoxelBrickStorage::BRICK_UNIFORM) {
 			directory_code = 1;
-			directory_bytes.set(brick_index * 4 + 3, brick.uniform_value);
+			directory_write[brick_index * 4 + 3] = brick.uniform_value;
 		} else if (brick.type == VoxelBrickStorage::BRICK_MIXED) {
 			directory_code = uint32_t(mixed_slot + 2);
 			const Vector3i atlas_brick(
@@ -148,39 +197,41 @@ void VoxelVolume3D::_rebuild_volume_textures() {
 						const int local_index = x + y * VoxelBrickStorage::BRICK_SIZE + z * VoxelBrickStorage::BRICK_SIZE * VoxelBrickStorage::BRICK_SIZE;
 						const Vector3i atlas_position = atlas_origin + Vector3i(x, y, z);
 						const int atlas_index = atlas_position.x + atlas_position.y * atlas_dimensions.x + atlas_position.z * atlas_dimensions.x * atlas_dimensions.y;
-						atlas_bytes.set(atlas_index, brick.mixed_values[local_index]);
+						atlas_write[atlas_index] = brick.mixed_values[local_index];
 					}
 				}
 			}
 			mixed_slot++;
 		}
-		directory_bytes.set(brick_index * 4 + 0, uint8_t(directory_code & 0xFF));
-		directory_bytes.set(brick_index * 4 + 1, uint8_t((directory_code >> 8) & 0xFF));
-		directory_bytes.set(brick_index * 4 + 2, uint8_t((directory_code >> 16) & 0xFF));
+		directory_write[brick_index * 4 + 0] = uint8_t(directory_code & 0xFF);
+		directory_write[brick_index * 4 + 1] = uint8_t((directory_code >> 8) & 0xFF);
+		directory_write[brick_index * 4 + 2] = uint8_t((directory_code >> 16) & 0xFF);
 	}
 	mixed_brick_atlas = _create_texture_3d(atlas_bytes, atlas_dimensions, Image::FORMAT_L8, 1);
 	brick_directory_texture = _create_texture_3d(directory_bytes, brick_dimensions, Image::FORMAT_RGBA8, 4);
 	rendered_revision = voxel_data->get_revision();
+	render_resources_built = true;
 
-	const Vector3 size = Vector3(dimensions) * voxel_data->get_voxel_size();
-	// Match VoxelShape3D: voxel (0,0,0) begins at the node origin.
-	local_aabb = AABB(Vector3(), size);
-	_rebuild_procedural_surface();
 	_update_material_bindings();
+	_rebuild_procedural_surface();
+	_rebuild_shadow_proxy();
 	update_gizmos();
 }
 
 void VoxelVolume3D::_rebuild_procedural_surface() {
+	if (!streaming_resident) {
+		return;
+	}
 	RenderingServer *rendering_server = RenderingServer::get_singleton();
 	rendering_server->mesh_clear(procedural_surface);
 	if (voxel_data.is_null()) {
 		return;
 	}
 
-	RenderingServer::SurfaceData surface;
-	surface.format = RenderingServer::ARRAY_FLAG_USES_EMPTY_VERTEX_ARRAY |
-			RenderingServer::ARRAY_FLAG_FORMAT_CURRENT_VERSION;
-	surface.primitive = RenderingServer::PRIMITIVE_TRIANGLES;
+	RenderingServerTypes::SurfaceData surface;
+	surface.format = RSE::ARRAY_FLAG_USES_EMPTY_VERTEX_ARRAY |
+			RSE::ARRAY_FLAG_FORMAT_CURRENT_VERSION;
+	surface.primitive = RSE::PRIMITIVE_TRIANGLES;
 	surface.vertex_count = 36;
 	surface.aabb = local_aabb;
 	rendering_server->mesh_add_surface(procedural_surface, surface);
@@ -190,15 +241,119 @@ void VoxelVolume3D::_rebuild_procedural_surface() {
 	}
 }
 
+void VoxelVolume3D::_sync_shadow_proxy_instance() {
+	RenderingServer *rendering_server = RenderingServer::get_singleton();
+	ERR_FAIL_NULL(rendering_server);
+	if (!shadow_proxy_instance.is_valid()) {
+		return;
+	}
+	const bool enabled = _uses_shadow_proxy();
+	const bool active = enabled && streaming_resident && shadow_proxy_has_surface && is_inside_world();
+	rendering_server->instance_set_scenario(
+			shadow_proxy_instance,
+			active ? get_world_3d()->get_scenario() : RID());
+	if (is_inside_tree()) {
+		rendering_server->instance_set_transform(shadow_proxy_instance, get_global_transform());
+	}
+	rendering_server->instance_set_visible(shadow_proxy_instance, active && is_visible_in_tree());
+}
+
+void VoxelVolume3D::_rebuild_shadow_proxy() {
+	RenderingServer *rendering_server = RenderingServer::get_singleton();
+	ERR_FAIL_NULL(rendering_server);
+	rendering_server->mesh_clear(shadow_proxy_mesh);
+	shadow_proxy_has_surface = false;
+	if (!_uses_shadow_proxy() ||
+			!streaming_resident || voxel_data.is_null()) {
+		_sync_shadow_proxy_instance();
+		return;
+	}
+
+	// Keep the shadow caster on the same voxel grid as the visible DDA surface.
+	// Coarsening this geometry moves silhouettes and reintroduces contact gaps.
+	static constexpr int PROXY_VOXEL_SCALE = 1;
+	const Vector3i dimensions = voxel_data->get_dimensions();
+	const Vector3i proxy_dimensions(
+			(dimensions.x + PROXY_VOXEL_SCALE - 1) / PROXY_VOXEL_SCALE,
+			(dimensions.y + PROXY_VOXEL_SCALE - 1) / PROXY_VOXEL_SCALE,
+			(dimensions.z + PROXY_VOXEL_SCALE - 1) / PROXY_VOXEL_SCALE);
+	const VoxelBrickStorage &storage = voxel_data->get_brick_storage();
+	auto occupied = [&](const Vector3i &p_cell) {
+		if (p_cell.x < 0 || p_cell.y < 0 || p_cell.z < 0 ||
+				p_cell.x >= proxy_dimensions.x || p_cell.y >= proxy_dimensions.y || p_cell.z >= proxy_dimensions.z) {
+			return false;
+		}
+		return storage.get_voxel(p_cell) != 0;
+	};
+
+	static const Vector3i face_directions[6] = {
+		Vector3i(0, 0, -1), Vector3i(0, 0, 1),
+		Vector3i(-1, 0, 0), Vector3i(1, 0, 0),
+		Vector3i(0, -1, 0), Vector3i(0, 1, 0)
+	};
+	static const int cube_indices[36] = {
+		0, 2, 1, 1, 2, 3,
+		4, 5, 6, 5, 7, 6,
+		0, 4, 2, 4, 6, 2,
+		1, 3, 5, 3, 7, 5,
+		0, 1, 4, 1, 5, 4,
+		2, 6, 3, 3, 6, 7
+	};
+	PackedVector3Array vertices;
+	const real_t voxel_size = voxel_data->get_voxel_size();
+	for (int z = 0; z < proxy_dimensions.z; z++) {
+		for (int y = 0; y < proxy_dimensions.y; y++) {
+			for (int x = 0; x < proxy_dimensions.x; x++) {
+				const Vector3i cell(x, y, z);
+				if (!occupied(cell)) {
+					continue;
+				}
+				const Vector3 minimum = Vector3(cell * PROXY_VOXEL_SCALE) * voxel_size;
+				const Vector3 maximum = Vector3((cell + Vector3i(1, 1, 1)) * PROXY_VOXEL_SCALE).min(Vector3(dimensions)) * voxel_size;
+				Vector3 corners[8];
+				for (int corner = 0; corner < 8; corner++) {
+					corners[corner] = Vector3(
+							(corner & 1) != 0 ? maximum.x : minimum.x,
+							(corner & 2) != 0 ? maximum.y : minimum.y,
+							(corner & 4) != 0 ? maximum.z : minimum.z);
+				}
+				for (int face = 0; face < 6; face++) {
+					if (occupied(cell + face_directions[face])) {
+						continue;
+					}
+					for (int vertex = 0; vertex < 6; vertex++) {
+						vertices.push_back(corners[cube_indices[face * 6 + vertex]]);
+					}
+				}
+			}
+		}
+	}
+
+	if (!vertices.is_empty()) {
+		Array arrays;
+		arrays.resize(RSE::ARRAY_MAX);
+		arrays[RSE::ARRAY_VERTEX] = vertices;
+		rendering_server->mesh_add_surface_from_arrays(shadow_proxy_mesh, RSE::PRIMITIVE_TRIANGLES, arrays);
+		shadow_proxy_has_surface = true;
+	}
+	_sync_shadow_proxy_instance();
+}
+
 void VoxelVolume3D::_update_material_bindings() {
-	if (voxel_data.is_null() || runtime_material.is_null()) {
+	if (!streaming_resident || voxel_data.is_null() || runtime_material.is_null()) {
 		return;
 	}
 	_ensure_fallback_textures();
-	const bool has_metallic = voxel_data->get_metallic_texture().is_valid();
-	const bool has_transparency = voxel_data->get_transparency_texture().is_valid();
-	const bool has_specularity = voxel_data->get_specularity_texture().is_valid();
-	const bool has_emission = voxel_data->get_emission_texture().is_valid();
+	const Ref<Texture2D> palette = voxel_material.is_valid() && voxel_material->get_palette_texture().is_valid() ? voxel_material->get_palette_texture() : voxel_data->get_palette_texture();
+	const Ref<Texture2D> material = voxel_material.is_valid() && voxel_material->get_material_texture().is_valid() ? voxel_material->get_material_texture() : voxel_data->get_material_texture();
+	const Ref<Texture2D> metallic = voxel_material.is_valid() && voxel_material->get_metallic_texture().is_valid() ? voxel_material->get_metallic_texture() : voxel_data->get_metallic_texture();
+	const Ref<Texture2D> transparency_texture = voxel_material.is_valid() && voxel_material->get_transparency_texture().is_valid() ? voxel_material->get_transparency_texture() : voxel_data->get_transparency_texture();
+	const Ref<Texture2D> specularity = voxel_material.is_valid() && voxel_material->get_specularity_texture().is_valid() ? voxel_material->get_specularity_texture() : voxel_data->get_specularity_texture();
+	const Ref<Texture2D> emission = voxel_material.is_valid() && voxel_material->get_emission_texture().is_valid() ? voxel_material->get_emission_texture() : voxel_data->get_emission_texture();
+	const bool has_metallic = metallic.is_valid();
+	const bool has_transparency = transparency_texture.is_valid();
+	const bool has_specularity = specularity.is_valid();
+	const bool has_emission = emission.is_valid();
 	runtime_material->set_transparency_enabled(has_transparency);
 	const Vector3i dimensions = voxel_data->get_dimensions();
 	const Vector3i brick_dimensions(
@@ -213,39 +368,146 @@ void VoxelVolume3D::_update_material_bindings() {
 	runtime_material->set_shader_parameter("u_neighbor_mask", neighbor_mask);
 	runtime_material->set_shader_parameter(
 			"u_palette",
-			voxel_data->get_palette_texture().is_valid() ?
-					voxel_data->get_palette_texture() : fallback_palette);
+			palette.is_valid() ? palette : fallback_palette);
 	runtime_material->set_shader_parameter(
 			"u_material",
-			voxel_data->get_material_texture().is_valid() ?
-					voxel_data->get_material_texture() : fallback_material);
-	runtime_material->set_shader_parameter("u_metallic", has_metallic ? voxel_data->get_metallic_texture() : fallback_material);
-	runtime_material->set_shader_parameter("u_specularity", has_specularity ? voxel_data->get_specularity_texture() : fallback_material);
-	runtime_material->set_shader_parameter("u_emission", has_emission ? voxel_data->get_emission_texture() : fallback_material);
+			material.is_valid() ? material : fallback_material);
+	runtime_material->set_shader_parameter("u_metallic", has_metallic ? metallic : fallback_material);
+	runtime_material->set_shader_parameter("u_specularity", has_specularity ? specularity : fallback_material);
+	runtime_material->set_shader_parameter("u_emission", has_emission ? emission : fallback_material);
 	runtime_material->set_shader_parameter("u_has_metallic", has_metallic);
 	runtime_material->set_shader_parameter("u_has_specularity", has_specularity);
 	runtime_material->set_shader_parameter("u_has_emission", has_emission);
-	if (has_transparency) runtime_material->set_shader_parameter("u_transparency", voxel_data->get_transparency_texture());
+	if (has_transparency) runtime_material->set_shader_parameter("u_transparency", transparency_texture);
 	runtime_material->set_shader_parameter("u_volume_dims", dimensions);
 	runtime_material->set_shader_parameter("u_brick_dims", brick_dimensions);
 	runtime_material->set_shader_parameter("u_atlas_brick_dims", atlas_brick_dimensions);
 	runtime_material->set_shader_parameter(
 			"u_volume_size", Vector3(dimensions) * voxel_data->get_voxel_size());
 	runtime_material->set_shader_parameter("u_voxel_size", voxel_data->get_voxel_size());
+	_sync_voxel_forward_volume();
+}
+
+void VoxelVolume3D::_sync_voxel_forward_volume(bool p_remove) {
+	using RendererSceneRenderImplementation::VoxelForwardVolumeStorage;
+	if (VoxelForwardVolumeStorage::get_singleton() == nullptr || !procedural_surface.is_valid()) {
+		return;
+	}
+
+	RenderingServer *rendering_server = RenderingServer::get_singleton();
+	ERR_FAIL_NULL(rendering_server);
+	if (p_remove || !streaming_resident || voxel_data.is_null() || mixed_brick_atlas.is_null() || brick_directory_texture.is_null()) {
+		rendering_server->call_on_render_thread(callable_mp_static(&VoxelForwardVolumeStorage::volume_remove_on_render_thread).bind(procedural_surface));
+		voxel_forward_dirty_valid = false;
+		return;
+	}
+
+	_ensure_fallback_textures();
+	const Vector3i dimensions = voxel_data->get_dimensions();
+	const Vector3i brick_dimensions(
+			(dimensions.x + VoxelBrickStorage::BRICK_SIZE - 1) / VoxelBrickStorage::BRICK_SIZE,
+			(dimensions.y + VoxelBrickStorage::BRICK_SIZE - 1) / VoxelBrickStorage::BRICK_SIZE,
+			(dimensions.z + VoxelBrickStorage::BRICK_SIZE - 1) / VoxelBrickStorage::BRICK_SIZE);
+	const Ref<Texture2D> palette_texture = voxel_material.is_valid() && voxel_material->get_palette_texture().is_valid() ? voxel_material->get_palette_texture() : voxel_data->get_palette_texture();
+	const Ref<Texture2D> material_texture = voxel_material.is_valid() && voxel_material->get_material_texture().is_valid() ? voxel_material->get_material_texture() : voxel_data->get_material_texture();
+	const RID palette = palette_texture.is_valid() ? palette_texture->get_rid() : fallback_palette->get_rid();
+	const RID material = material_texture.is_valid() ? material_texture->get_rid() : fallback_material->get_rid();
+	const VoxelBrickStorage &storage = voxel_data->get_brick_storage();
+	PackedByteArray occupancy_directory;
+	occupancy_directory.resize(storage.get_brick_count() * sizeof(uint32_t));
+	occupancy_directory.fill(0);
+	int mixed_brick_count = 0;
+	for (int brick_index = 0; brick_index < storage.get_brick_count(); brick_index++) {
+		if (storage.get_brick(brick_index).type == VoxelBrickStorage::BRICK_MIXED) {
+			mixed_brick_count++;
+		}
+	}
+	PackedByteArray occupancy_bricks;
+	occupancy_bricks.resize(mixed_brick_count * (VoxelBrickStorage::BRICK_VOXEL_COUNT / 8));
+	occupancy_bricks.fill(0);
+	uint8_t *directory_write = occupancy_directory.ptrw();
+	uint8_t *brick_write = occupancy_bricks.ptrw();
+	int mixed_slot = 0;
+	for (int brick_index = 0; brick_index < storage.get_brick_count(); brick_index++) {
+		const VoxelBrickStorage::Brick &brick = storage.get_brick(brick_index);
+		uint32_t directory_code = 0;
+		if (brick.type == VoxelBrickStorage::BRICK_UNIFORM && brick.uniform_value != 0) {
+			directory_code = 1;
+		} else if (brick.type == VoxelBrickStorage::BRICK_MIXED) {
+			directory_code = uint32_t(mixed_slot + 2);
+			uint8_t *mixed_write = brick_write + mixed_slot * (VoxelBrickStorage::BRICK_VOXEL_COUNT / 8);
+			for (int local_index = 0; local_index < VoxelBrickStorage::BRICK_VOXEL_COUNT; local_index++) {
+				if (brick.mixed_values[local_index] != 0) {
+					mixed_write[local_index >> 3] |= uint8_t(1u << (local_index & 7));
+				}
+			}
+			mixed_slot++;
+		}
+		directory_write[brick_index * 4 + 0] = uint8_t(directory_code & 0xFF);
+		directory_write[brick_index * 4 + 1] = uint8_t((directory_code >> 8) & 0xFF);
+		directory_write[brick_index * 4 + 2] = uint8_t((directory_code >> 16) & 0xFF);
+		directory_write[brick_index * 4 + 3] = uint8_t((directory_code >> 24) & 0xFF);
+	}
+	rendering_server->call_on_render_thread(callable_mp_static(&VoxelForwardVolumeStorage::volume_set_on_render_thread).bind(
+			procedural_surface,
+			mixed_brick_atlas->get_rid(),
+			brick_directory_texture->get_rid(),
+			palette,
+			material,
+			occupancy_directory,
+			occupancy_bricks,
+			dimensions,
+			brick_dimensions,
+			atlas_brick_dimensions,
+			is_inside_tree() ? get_global_transform() : get_transform(),
+			float(voxel_data->get_voxel_size()),
+			voxel_forward_dirty_valid ? voxel_forward_dirty_position : Vector3i(),
+			voxel_forward_dirty_valid ? voxel_forward_dirty_size : Vector3i(),
+			int64_t(voxel_data->get_revision())));
+	voxel_forward_dirty_valid = false;
 }
 
 void VoxelVolume3D::_rebuild_runtime_material() {
-	runtime_material.instantiate();
+	// The authored VoxelMaterial is intentionally shared between volumes, just
+	// like a StandardMaterial3D resource. Keep only the generated shader and the
+	// volume-specific texture bindings private.
+	if (runtime_material.is_null()) {
+		runtime_material.instantiate();
+	}
 	if (voxel_material.is_valid()) {
 		runtime_material->set_shading_mode(voxel_material->get_shading_mode());
+		runtime_material->set_lighting_position_mode(voxel_material->get_lighting_position_mode());
+		runtime_material->set_albedo_modulate(voxel_material->get_albedo_modulate());
+		runtime_material->set_roughness_multiplier(voxel_material->get_roughness_multiplier());
+		runtime_material->set_metallic_multiplier(voxel_material->get_metallic_multiplier());
+		runtime_material->set_specularity_multiplier(voxel_material->get_specularity_multiplier());
 		runtime_material->set_emission_energy(voxel_material->get_emission_energy());
+		runtime_material->set_outline_enabled(voxel_material->is_outline_enabled());
+		runtime_material->set_outline_color(voxel_material->get_outline_color());
+		runtime_material->set_outline_width(voxel_material->get_outline_width());
+	} else {
+		runtime_material->set_shading_mode(VoxelMaterial::SHADING_MODE_PBR);
+		runtime_material->set_lighting_position_mode(VoxelMaterial::LIGHTING_POSITION_VOXEL_FACE_CENTER);
+		runtime_material->set_albedo_modulate(Color(1.0, 1.0, 1.0, 1.0));
+		runtime_material->set_roughness_multiplier(1.0);
+		runtime_material->set_metallic_multiplier(1.0);
+		runtime_material->set_specularity_multiplier(1.0);
+		runtime_material->set_emission_energy(1.0);
+		runtime_material->set_outline_enabled(false);
+		runtime_material->set_outline_color(Color(0.0, 0.0, 0.0, 1.0));
+		runtime_material->set_outline_width(1.0);
 	}
 	runtime_material->ensure_shader();
 }
 
 void VoxelVolume3D::_voxel_data_changed() {
+	if (voxel_change_notification_pending) {
+		voxel_change_notification_pending = false;
+		return;
+	}
 	if (VoxelVolumeStreamingManager::get_singleton() != nullptr) {
 		VoxelVolumeStreamingManager::get_singleton()->mark_neighbors_dirty();
+		VoxelVolumeStreamingManager::get_singleton()->mark_occupancy_dirty();
 	}
 	if (voxel_data.is_null()) {
 		_rebuild_volume_textures();
@@ -257,23 +519,59 @@ void VoxelVolume3D::_voxel_data_changed() {
 		return;
 	}
 	local_aabb = AABB(Vector3(), Vector3(voxel_data->get_dimensions()) * voxel_data->get_voxel_size());
+	if (!streaming_resident) {
+		update_gizmos();
+		return;
+	}
 	_rebuild_procedural_surface();
+	_rebuild_shadow_proxy();
 	_update_material_bindings();
 	update_gizmos();
 }
 
 void VoxelVolume3D::_voxel_data_voxels_changed(const Vector3i &p_position, const Vector3i &p_size, int64_t p_revision) {
+	voxel_change_notification_pending = true;
+	if (!voxel_forward_dirty_valid) {
+		voxel_forward_dirty_position = p_position;
+		voxel_forward_dirty_size = p_size;
+		voxel_forward_dirty_valid = true;
+	} else {
+		const Vector3i previous_end = voxel_forward_dirty_position + voxel_forward_dirty_size;
+		const Vector3i changed_end = p_position + p_size;
+		const Vector3i merged_begin(
+				MIN(voxel_forward_dirty_position.x, p_position.x),
+				MIN(voxel_forward_dirty_position.y, p_position.y),
+				MIN(voxel_forward_dirty_position.z, p_position.z));
+		const Vector3i merged_end(
+				MAX(previous_end.x, changed_end.x),
+				MAX(previous_end.y, changed_end.y),
+				MAX(previous_end.z, changed_end.z));
+		voxel_forward_dirty_position = merged_begin;
+		voxel_forward_dirty_size = merged_end - merged_begin;
+	}
 	if (streaming_resident) {
 		_rebuild_volume_textures();
 	}
 	if (VoxelVolumeStreamingManager::get_singleton() != nullptr) {
-		VoxelVolumeStreamingManager::get_singleton()->mark_neighbors_dirty();
+		// Neighbor face textures only depend on voxels at this volume's six
+		// boundaries. Interior destruction must not trigger an O(volume^2)
+		// adjacency scan across the entire streamed world.
+		const Vector3i dimensions = voxel_data.is_valid() ? voxel_data->get_dimensions() : Vector3i();
+		const Vector3i changed_end = p_position + p_size;
+		if (p_position.x <= 0 || p_position.y <= 0 || p_position.z <= 0 ||
+				changed_end.x >= dimensions.x || changed_end.y >= dimensions.y || changed_end.z >= dimensions.z) {
+			VoxelVolumeStreamingManager::get_singleton()->mark_volume_neighbors_dirty(this);
+		}
+		VoxelVolumeStreamingManager::get_singleton()->mark_occupancy_dirty();
 	}
 }
 
 void VoxelVolume3D::_voxel_material_changed() {
+	if (!streaming_resident) {
+		runtime_material.unref();
+		return;
+	}
 	_rebuild_runtime_material();
-	_rebuild_procedural_surface();
 	_update_material_bindings();
 }
 
@@ -291,6 +589,7 @@ void VoxelVolume3D::set_voxel_data(const Ref<VoxelShapeData> &p_data) {
 	_rebuild_volume_textures();
 	if (VoxelVolumeStreamingManager::get_singleton() != nullptr) {
 		VoxelVolumeStreamingManager::get_singleton()->mark_neighbors_dirty();
+		VoxelVolumeStreamingManager::get_singleton()->mark_occupancy_dirty();
 	}
 }
 
@@ -371,19 +670,21 @@ void VoxelVolume3D::set_streaming_resident(bool p_resident) {
 	if (streaming_mode == STREAMING_ALWAYS_RESIDENT) {
 		p_resident = true;
 	}
+	// Older scenes serialized the runtime residency flag as true on every
+	// automatic volume. Do not eagerly build all GPU textures while those nodes
+	// are still being deserialized; the first manager frame ranks them by camera
+	// distance and applies the actual resident budget.
+	if (!is_inside_tree() && streaming_mode == STREAMING_AUTOMATIC && p_resident) {
+		return;
+	}
 	if (streaming_resident == p_resident) {
 		return;
 	}
 	streaming_resident = p_resident;
-	if (streaming_resident) {
-		_rebuild_volume_textures();
-	} else {
-		mixed_brick_atlas.unref();
-		brick_directory_texture.unref();
-		RenderingServer::get_singleton()->mesh_clear(procedural_surface);
-	}
+	_rebuild_volume_textures();
 	if (VoxelVolumeStreamingManager::get_singleton() != nullptr) {
 		VoxelVolumeStreamingManager::get_singleton()->mark_neighbors_dirty();
+		VoxelVolumeStreamingManager::get_singleton()->mark_occupancy_dirty();
 	}
 }
 
@@ -467,16 +768,50 @@ void VoxelVolume3D::update_neighbor_faces(VoxelVolume3D *const p_neighbors[NEIGH
 
 void VoxelVolume3D::_notification(int p_what) {
 	if (p_what == NOTIFICATION_ENTER_TREE) {
+		// Serialized scenes may restore the main instance's shadow flag after the
+		// constructor. The proxy must be the only caster or the DDA shader will
+		// still run in every cascade and erase the performance gain.
+		if (_uses_occupancy_shadows() || _uses_voxel_forward_shadow_mask() || _uses_shadow_proxy()) {
+			set_cast_shadows_setting(SHADOW_CASTING_SETTING_OFF);
+		} else {
+			set_cast_shadows_setting(SHADOW_CASTING_SETTING_ON);
+		}
 		if (VoxelVolumeStreamingManager::get_singleton() != nullptr) {
 			VoxelVolumeStreamingManager::get_singleton()->register_volume(this);
 		}
+		// Runtime resources can be prepared before entering the tree, when only
+		// the local transform is available. Register again here so nested volumes
+		// use their final global transform, and so a volume removed and re-added to
+		// the tree is restored to the render-thread occupancy world.
+		if (streaming_resident) {
+			_sync_voxel_forward_volume();
+		}
 	} else if (p_what == NOTIFICATION_EXIT_TREE) {
+		// A detached node must stop contributing immediately. Waiting until its
+		// destructor leaves stale occupancy behind and produces ghost shadows.
+		_sync_voxel_forward_volume(true);
 		if (VoxelVolumeStreamingManager::get_singleton() != nullptr) {
 			VoxelVolumeStreamingManager::get_singleton()->unregister_volume(this);
 		}
+	} else if (p_what == NOTIFICATION_ENTER_WORLD) {
+		_sync_shadow_proxy_instance();
+	} else if (p_what == NOTIFICATION_EXIT_WORLD) {
+		if (shadow_proxy_instance.is_valid()) {
+			RenderingServer::get_singleton()->instance_set_scenario(shadow_proxy_instance, RID());
+		}
+	} else if (p_what == NOTIFICATION_VISIBILITY_CHANGED) {
+		_sync_shadow_proxy_instance();
 	} else if (p_what == NOTIFICATION_TRANSFORM_CHANGED) {
+		if (is_inside_tree()) {
+			set_cast_shadows_setting((_uses_occupancy_shadows() || _uses_voxel_forward_shadow_mask() || _uses_shadow_proxy()) ? SHADOW_CASTING_SETTING_OFF : SHADOW_CASTING_SETTING_ON);
+		}
+		_sync_shadow_proxy_instance();
+		if (is_inside_tree() && streaming_resident && procedural_surface.is_valid() && RendererSceneRenderImplementation::VoxelForwardVolumeStorage::get_singleton() != nullptr) {
+			RenderingServer::get_singleton()->call_on_render_thread(callable_mp_static(&RendererSceneRenderImplementation::VoxelForwardVolumeStorage::volume_transform_set_on_render_thread).bind(procedural_surface, get_global_transform()));
+		}
 		if (VoxelVolumeStreamingManager::get_singleton() != nullptr) {
 			VoxelVolumeStreamingManager::get_singleton()->mark_neighbors_dirty();
+			VoxelVolumeStreamingManager::get_singleton()->mark_occupancy_dirty();
 		}
 	}
 }
@@ -489,19 +824,21 @@ void VoxelVolume3D::set_voxel_material(const Ref<VoxelMaterial> &p_material) {
 		voxel_material->disconnect_changed(callable_mp(this, &VoxelVolume3D::_voxel_material_changed));
 	}
 
-	// Copy only authored configuration. Older scenes may contain a generated
-	// Shader and ImageTexture3D uniforms inside p_material; retaining that
-	// resource would keep hundreds of runtime texture slices serialized.
-	voxel_material.unref();
+	// Retain the authored resource itself so one VoxelMaterial can be assigned
+	// to any number of volumes and edited once. Generated shaders and per-volume
+	// texture bindings live exclusively in runtime_material and are never added
+	// to this shared resource.
+	voxel_material = p_material;
 	if (p_material.is_valid()) {
-		voxel_material.instantiate();
-		voxel_material->set_shading_mode(p_material->get_shading_mode());
-		voxel_material->set_emission_energy(p_material->get_emission_energy());
 		voxel_material->connect_changed(callable_mp(this, &VoxelVolume3D::_voxel_material_changed));
 	}
-	_rebuild_runtime_material();
-	_rebuild_procedural_surface();
-	_update_material_bindings();
+	if (streaming_resident) {
+		_rebuild_runtime_material();
+		_update_material_bindings();
+		_rebuild_procedural_surface();
+	} else {
+		runtime_material.unref();
+	}
 }
 
 Ref<VoxelMaterial> VoxelVolume3D::get_voxel_material() const { return voxel_material; }
@@ -509,13 +846,25 @@ Ref<VoxelMaterial> VoxelVolume3D::get_voxel_material() const { return voxel_mate
 AABB VoxelVolume3D::get_aabb() const { return local_aabb; }
 
 VoxelVolume3D::VoxelVolume3D() {
-	procedural_surface = RenderingServer::get_singleton()->mesh_create();
+	RenderingServer *rendering_server = RenderingServer::get_singleton();
+	procedural_surface = rendering_server->mesh_create();
 	set_base(procedural_surface);
+	shadow_proxy_mesh = rendering_server->mesh_create();
+	shadow_proxy_instance = rendering_server->instance_create();
+	rendering_server->instance_set_base(shadow_proxy_instance, shadow_proxy_mesh);
+	rendering_server->instance_geometry_set_cast_shadows_setting(
+			shadow_proxy_instance, RSE::SHADOW_CASTING_SETTING_SHADOWS_ONLY);
+	// Scene deserialization can apply transforms before the node enters the
+	// tree. Shadow-path selection needs the final global transform, so defer it
+	// to NOTIFICATION_ENTER_TREE.
+	if (_uses_occupancy_shadows() || _uses_shadow_proxy()) {
+		set_cast_shadows_setting(SHADOW_CASTING_SETTING_OFF);
+	}
 	set_notify_transform(true);
-	_rebuild_runtime_material();
 }
 
 VoxelVolume3D::~VoxelVolume3D() {
+	_sync_voxel_forward_volume(true);
 	if (voxel_data.is_valid()) {
 		voxel_data->disconnect_changed(callable_mp(this, &VoxelVolume3D::_voxel_data_changed));
 		voxel_data->disconnect(SNAME("voxels_changed"), callable_mp(this, &VoxelVolume3D::_voxel_data_voxels_changed));
@@ -524,6 +873,12 @@ VoxelVolume3D::~VoxelVolume3D() {
 		voxel_material->disconnect_changed(callable_mp(this, &VoxelVolume3D::_voxel_material_changed));
 	}
 	if (procedural_surface.is_valid() && RenderingServer::get_singleton() != nullptr) {
-		RenderingServer::get_singleton()->free(procedural_surface);
+		RenderingServer::get_singleton()->free_rid(procedural_surface);
+	}
+	if (shadow_proxy_instance.is_valid() && RenderingServer::get_singleton() != nullptr) {
+		RenderingServer::get_singleton()->free_rid(shadow_proxy_instance);
+	}
+	if (shadow_proxy_mesh.is_valid() && RenderingServer::get_singleton() != nullptr) {
+		RenderingServer::get_singleton()->free_rid(shadow_proxy_mesh);
 	}
 }

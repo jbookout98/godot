@@ -8380,6 +8380,8 @@ Error RenderingDevice::initialize(RenderingContextDriver *p_context, DisplayServ
 		String rendering_method;
 		if (OS::get_singleton()->get_current_rendering_method() == "mobile") {
 			rendering_method = "Forward Mobile";
+		} else if (OS::get_singleton()->get_current_rendering_method() == "voxel_forward") {
+			rendering_method = "Voxel Forward";
 		} else {
 			rendering_method = "Forward+";
 		}

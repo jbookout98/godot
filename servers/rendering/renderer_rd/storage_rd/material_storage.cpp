@@ -1004,7 +1004,10 @@ void MaterialStorage::MaterialData::update_textures(const HashMap<StringName, Va
 						render_target_cache.push_back(tex->render_target);
 					}
 				}
-				if (rd_texture.is_null()) {
+				// A texture resource can outlive its RenderingDevice texture while it is
+				// being recreated (for example, when switching to an embedded game). A
+				// non-null stale RID must not be added to a uniform set.
+				if (!RD::get_singleton()->texture_is_valid(rd_texture)) {
 					if (rd_default.is_null()) {
 						rd_default = get_default_texture_id(p_texture_uniforms[i].type, p_texture_uniforms[i].hint);
 					}

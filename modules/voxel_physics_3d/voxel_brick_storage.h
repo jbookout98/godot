@@ -27,6 +27,9 @@ public:
 		uint8_t uniform_value = 0;
 		PackedByteArray mixed_values;
 		int occupied_count = 0;
+		// Occupancy of the eight 4x4x4 subcells in this 8x8x8 brick.
+		// Derived from voxel data and never serialized.
+		uint8_t coarse_occupancy_4 = 0;
 		uint8_t dirty_flags = DIRTY_NONE;
 		uint64_t revision = 0;
 	};
@@ -41,6 +44,7 @@ private:
 	int _get_local_index(const Vector3i &p_position) const;
 	int _get_valid_voxel_count(const Vector3i &p_brick) const;
 	void _normalize_brick(int p_brick_index);
+	void _rebuild_coarse_occupancy_4(int p_brick_index);
 
 public:
 	void reset(const Vector3i &p_dimensions);

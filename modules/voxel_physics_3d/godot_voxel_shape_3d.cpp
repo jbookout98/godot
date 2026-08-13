@@ -8,20 +8,16 @@ GodotVoxelShape3D::GodotVoxelShape3D() :
 
 void GodotVoxelShape3D::set_data(const Variant &p_data) {
 	Ref<VoxelShapeData> new_data = p_data;
-	const bool resource_changed = voxel_data != new_data;
 	voxel_data = new_data;
 
 	if (voxel_data.is_null()) {
 		brick_caches.clear();
 		solid_count = 0;
-		surface_feature_count = 0;
-		face_feature_count = 0;
-		edge_feature_count = 0;
-		corner_feature_count = 0;
 		cached_revision = UINT64_MAX;
 		center_of_mass = Vector3();
 		inertia_per_unit_mass = Vector3();
 		occupied_volume = 0.0;
+		mass_properties_valid = false;
 		local_aabb = AABB();
 		configure(local_aabb);
 		return;
@@ -31,8 +27,7 @@ void GodotVoxelShape3D::set_data(const Variant &p_data) {
 	const real_t voxel_size = voxel_data->get_voxel_size();
 	default_cube_feature.set_data(Vector3(1, 1, 1) * voxel_size * 0.5);
 	default_corner_feature.set_data(voxel_size * 0.5);
-	_rebuild_brick_caches(resource_changed);
-	_rebuild_mass_properties();
+	_invalidate_brick_caches();
 
 	configure(local_aabb);
 }
@@ -41,11 +36,15 @@ Variant GodotVoxelShape3D::get_data() const {
 	return voxel_data;
 }
 
-void GodotVoxelShape3D::_rebuild_mass_properties() {
+void GodotVoxelShape3D::_rebuild_mass_properties() const {
+	if (mass_properties_valid) {
+		return;
+	}
+	_ensure_all_brick_caches();
 	center_of_mass = Vector3();
 	inertia_per_unit_mass = Vector3();
-	occupied_volume = 0.0;
 	if (voxel_data.is_null()) {
+		mass_properties_valid = true;
 		return;
 	}
 
@@ -59,23 +58,29 @@ void GodotVoxelShape3D::_rebuild_mass_properties() {
 
 	if (solid_count == 0) {
 		center_of_mass = local_aabb.get_center();
+		mass_properties_valid = true;
 		return;
 	}
 
 	const Vector3 mean_grid = center_sum_grid / real_t(solid_count);
 	center_of_mass = mean_grid * voxel_size;
-	occupied_volume = real_t(solid_count) * voxel_size * voxel_size * voxel_size;
 	const real_t cube_inertia = voxel_size * voxel_size / 6.0;
 	const Vector3 variance_grid = center_squared_sum_grid / real_t(solid_count) - mean_grid * mean_grid;
 	inertia_per_unit_mass = Vector3(
 			cube_inertia + (variance_grid.y + variance_grid.z) * voxel_size * voxel_size,
 			cube_inertia + (variance_grid.x + variance_grid.z) * voxel_size * voxel_size,
 			cube_inertia + (variance_grid.x + variance_grid.y) * voxel_size * voxel_size);
+	mass_properties_valid = true;
 }
 
-void GodotVoxelShape3D::_rebuild_brick_cache(int p_brick_index) {
+void GodotVoxelShape3D::_ensure_brick_cache(int p_brick_index) const {
+	ERR_FAIL_INDEX(p_brick_index, brick_caches.size());
+	if (brick_caches[p_brick_index].initialized) {
+		return;
+	}
 	PhysicsBrickCache &cache = brick_caches.write[p_brick_index];
 	cache = PhysicsBrickCache();
+	cache.initialized = true;
 	const VoxelBrickStorage &storage = voxel_data->get_brick_storage();
 	const VoxelBrickStorage::Brick &brick = storage.get_brick(p_brick_index);
 	if (brick.type == VoxelBrickStorage::BRICK_EMPTY) {
@@ -97,14 +102,15 @@ void GodotVoxelShape3D::_rebuild_brick_cache(int p_brick_index) {
 				if (!cache.uniform_solid) {
 					cache.solid_local_indices.push_back(local_index);
 				}
-				if (voxel_data->is_face(position)) {
+				const int surface_class = voxel_data->get_surface_class(position);
+				if (surface_class == 1) {
 					cache.surface_local_indices.push_back(local_index);
 					cache.face_local_indices.push_back(local_index);
-				} else if (voxel_data->is_edge(position)) {
+				} else if (surface_class == 2) {
 					cache.surface_local_indices.push_back(local_index);
 					cache.edge_local_indices.push_back(local_index);
 					cache.edge_bits[local_index >> 6] |= UINT64_C(1) << (local_index & 63);
-				} else if (voxel_data->is_corner(position)) {
+				} else if (surface_class == 3) {
 					cache.surface_local_indices.push_back(local_index);
 					cache.corner_local_indices.push_back(local_index);
 				}
@@ -114,6 +120,12 @@ void GodotVoxelShape3D::_rebuild_brick_cache(int p_brick_index) {
 				cache.occupied_count++;
 			}
 		}
+	}
+}
+
+void GodotVoxelShape3D::_ensure_all_brick_caches() const {
+	for (int index = 0; index < brick_caches.size(); index++) {
+		_ensure_brick_cache(index);
 	}
 }
 
@@ -133,52 +145,29 @@ bool GodotVoxelShape3D::is_edge_feature(const Vector3i &p_voxel) const {
 	const int z = p_voxel.z % VoxelBrickStorage::BRICK_SIZE;
 	const int local_index = x + y * VoxelBrickStorage::BRICK_SIZE +
 			z * VoxelBrickStorage::BRICK_SIZE * VoxelBrickStorage::BRICK_SIZE;
+	_ensure_brick_cache(brick_index);
 	return (brick_caches[brick_index].edge_bits[local_index >> 6] &
 			(UINT64_C(1) << (local_index & 63))) != 0;
 }
 
-void GodotVoxelShape3D::_rebuild_brick_caches(bool p_force_full) {
+void GodotVoxelShape3D::_invalidate_brick_caches() {
 	if (voxel_data.is_null()) {
 		return;
 	}
 	const VoxelBrickStorage &storage = voxel_data->get_brick_storage();
-	const bool layout_changed = cached_dimensions != voxel_data->get_dimensions() || brick_caches.size() != storage.get_brick_count();
-	p_force_full = p_force_full || layout_changed || cached_revision == UINT64_MAX || cached_revision + 1 != voxel_data->get_revision();
-	if (p_force_full) {
-		brick_caches.resize(storage.get_brick_count());
-		for (int index = 0; index < brick_caches.size(); index++) {
-			_rebuild_brick_cache(index);
-		}
-	} else if (cached_revision != voxel_data->get_revision()) {
-		const Vector3i dimensions = voxel_data->get_dimensions();
-		const Vector3i dirty_position = (voxel_data->get_last_dirty_position() - Vector3i(1, 1, 1)).clamp(Vector3i(), dimensions - Vector3i(1, 1, 1));
-		const Vector3i dirty_end = (voxel_data->get_last_dirty_position() + voxel_data->get_last_dirty_size()).clamp(Vector3i(), dimensions - Vector3i(1, 1, 1));
-		const Vector3i brick_from = dirty_position / VoxelBrickStorage::BRICK_SIZE;
-		const Vector3i brick_to = dirty_end / VoxelBrickStorage::BRICK_SIZE;
-		const Vector3i brick_dimensions = storage.get_brick_dimensions();
-		for (int z = brick_from.z; z <= brick_to.z; z++) {
-			for (int y = brick_from.y; y <= brick_to.y; y++) {
-				for (int x = brick_from.x; x <= brick_to.x; x++) {
-					_rebuild_brick_cache(x + y * brick_dimensions.x + z * brick_dimensions.x * brick_dimensions.y);
-				}
-			}
-		}
-	}
-
+	brick_caches.clear();
+	brick_caches.resize(storage.get_brick_count());
 	solid_count = 0;
-	surface_feature_count = 0;
-	face_feature_count = 0;
-	edge_feature_count = 0;
-	corner_feature_count = 0;
-	for (const PhysicsBrickCache &cache : brick_caches) {
-		solid_count += cache.occupied_count;
-		surface_feature_count += cache.surface_local_indices.size();
-		face_feature_count += cache.face_local_indices.size();
-		edge_feature_count += cache.edge_local_indices.size();
-		corner_feature_count += cache.corner_local_indices.size();
+	for (int index = 0; index < storage.get_brick_count(); index++) {
+		solid_count += storage.get_brick(index).occupied_count;
 	}
 	cached_dimensions = voxel_data->get_dimensions();
 	cached_revision = voxel_data->get_revision();
+	const real_t voxel_size = voxel_data->get_voxel_size();
+	occupied_volume = real_t(solid_count) * voxel_size * voxel_size * voxel_size;
+	center_of_mass = local_aabb.get_center();
+	inertia_per_unit_mass = Vector3();
+	mass_properties_valid = false;
 }
 
 void GodotVoxelShape3D::_build_feature_table(GodotShape3D *p_shape, const Vector3 &p_scale, VoxelFeatureProxy3D (&r_table)[64]) {
@@ -246,17 +235,10 @@ bool GodotVoxelShape3D::IndexRange::is_empty() const {
 	if (shape == nullptr) {
 		return true;
 	}
-	if (bounded) {
-		return !(begin() != end());
+	if (!bounded && feature == 0) {
+		return shape->solid_count == 0;
 	}
-	switch (feature) {
-		case 0: return shape->solid_count == 0;
-		case 1: return shape->face_feature_count == 0;
-		case 2: return shape->edge_feature_count == 0;
-		case 3: return shape->corner_feature_count == 0;
-		case 4: return shape->surface_feature_count == 0;
-		default: return true;
-	}
+	return !(begin() != end());
 }
 
 GodotVoxelShape3D::IndexIterator::IndexIterator(const GodotVoxelShape3D *p_shape, int p_feature, bool p_bounded, const Vector3i &p_from, const Vector3i &p_to, bool p_end) {
@@ -290,7 +272,6 @@ bool GodotVoxelShape3D::_find_next_index(int p_feature, bool p_bounded, const Ve
 	const VoxelBrickStorage &storage = voxel_data->get_brick_storage();
 	const Vector3i dimensions = voxel_data->get_dimensions();
 	while (r_brick_index < brick_caches.size()) {
-		const PhysicsBrickCache &cache = brick_caches[r_brick_index];
 		const Vector3i brick_origin = storage.brick_index_to_position(r_brick_index) * VoxelBrickStorage::BRICK_SIZE;
 		if (p_bounded) {
 			// Bricks are stored with Z as the outermost coordinate. Once this is
@@ -306,6 +287,10 @@ bool GodotVoxelShape3D::_find_next_index(int p_feature, bool p_bounded, const Ve
 				continue;
 			}
 		}
+		// Reject non-overlapping bricks before materializing their collision cache.
+		// CharacterBody3D floor/wall sweeps usually touch only a handful of bricks.
+		_ensure_brick_cache(r_brick_index);
+		const PhysicsBrickCache &cache = brick_caches[r_brick_index];
 		const Vector<uint16_t> *indices = nullptr;
 		if (p_feature == 1) {
 			indices = &cache.face_local_indices;
@@ -508,6 +493,11 @@ bool GodotVoxelShape3D::intersect_segment(const Vector3 &p_begin, const Vector3 
 	return false;
 }
 
+Vector3 GodotVoxelShape3D::get_center_of_mass() const {
+	_rebuild_mass_properties();
+	return center_of_mass;
+}
+
 bool GodotVoxelShape3D::intersect_point(const Vector3 &p_point) const {
 	if (voxel_data.is_null() || !local_aabb.has_point(p_point)) {
 		return false;
@@ -517,5 +507,6 @@ bool GodotVoxelShape3D::intersect_point(const Vector3 &p_point) const {
 }
 
 Vector3 GodotVoxelShape3D::get_moment_of_inertia(real_t p_mass) const {
+	_rebuild_mass_properties();
 	return inertia_per_unit_mass * p_mass;
 }
