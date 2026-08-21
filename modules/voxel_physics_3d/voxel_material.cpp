@@ -64,6 +64,11 @@ global uniform int voxel_forward_indirect_resolution;
 global uniform float voxel_forward_indirect_transition_cells;
 global uniform float voxel_forward_indirect_intensity;
 global uniform bool voxel_forward_indirect_ready;
+global uniform vec4 voxel_forward_ambient_color : source_color;
+global uniform float voxel_forward_ambient_energy;
+global uniform sampler2D voxel_forward_reflection : filter_nearest, repeat_disable;
+global uniform bool voxel_forward_reflection_ready;
+global uniform float voxel_forward_reflection_intensity;
 
 varying vec3 volume_proxy_position;
 varying vec3 volume_ray_origin;
@@ -206,7 +211,7 @@ float voxel_normal_outline(ivec3 voxel, vec3 face_position, int normal_axis) {
 
 )SHADER";
 
-static const char *VOXEL_FORWARD_MASK_LIGHT_BODY = R"SHADER(
+static const char *VOXEL_FORWARD_LIGHT_BODY = R"SHADER(
 
 float voxel_forward_schlick(float value) {
 	float m = 1.0 - value;
@@ -214,36 +219,22 @@ float voxel_forward_schlick(float value) {
 	return m2 * m2 * m;
 }
 
-float voxel_forward_ggx_distribution(float normal_dot_half, float alpha) {
-	float a = normal_dot_half * alpha;
-	float denominator = 1.0 - normal_dot_half * normal_dot_half + a * a;
-	float k = alpha / max(denominator, 0.000001);
-	return k * k / PI;
-}
-
-float voxel_forward_ggx_visibility(float normal_dot_light, float normal_dot_view, float alpha) {
-	return 0.5 / max(mix(2.0 * normal_dot_light * normal_dot_view,
-			normal_dot_light + normal_dot_view, alpha), 0.000001);
-}
-
 void light() {
 	float normal_dot_light = max(dot(NORMAL, LIGHT), 0.0);
 	if (normal_dot_light > 0.0) {
-		// The screen mask belongs to one directional light. Preserve stock
-		// lighting for point, spot, and any additional directional lights.
+		// The screen mask belongs to one directional light. Area lights retain
+		// Godot's LTC path and do not enter this custom point-light BRDF.
 		vec3 world_light_direction = normalize(mat3(INV_VIEW_MATRIX) * LIGHT);
 		bool is_masked_light = LIGHT_IS_DIRECTIONAL && voxel_forward_shadow_ready &&
 				dot(world_light_direction, voxel_forward_shadow_light_direction) > 0.9999;
 		float occupancy_visibility = is_masked_light ? textureLod(voxel_forward_shadow_mask, SCREEN_UV, 0.0).r : 1.0;
-		// The occupancy mask is the complete directional shadow answer for a
-		// voxel receiver. Multiplying Godot's conventional shadow-map attenuation
-		// back in reintroduces a smooth, per-pixel shadow edge on top of the
-		// face-constant occupancy result.
-		float visibility = is_masked_light ? occupancy_visibility : ATTENUATION;
+		// Occupancy covers voxel casters; the conventional shadow map covers
+		// dynamic mesh casters such as the player. Both receiver samples are
+		// evaluated at the voxel face center.
+		float visibility = ATTENUATION * occupancy_visibility;
 		if (visibility > 0.0) {
 			vec3 half_vector = normalize(LIGHT + VIEW);
 			float normal_dot_view = max(dot(NORMAL, VIEW), 0.0001);
-			float normal_dot_half = clamp(dot(NORMAL, half_vector), 0.0, 1.0);
 			float light_dot_half = clamp(dot(LIGHT, half_vector), 0.0, 1.0);
 
 			// Match Forward+'s default Burley diffuse BRDF. ALBEDO and the
@@ -254,14 +245,13 @@ void light() {
 			float diffuse_brdf_nl = (1.0 / PI) * fd_view * fd_light * normal_dot_light;
 			DIFFUSE_LIGHT += LIGHT_COLOR * diffuse_brdf_nl * visibility;
 
-			float alpha = ROUGHNESS * ROUGHNESS;
-			vec3 f0 = mix(vec3(0.16 * SPECULAR_AMOUNT * SPECULAR_AMOUNT), ALBEDO, METALLIC);
-			float f90 = clamp(dot(f0, vec3(50.0 * 0.33)), METALLIC, 1.0);
-			vec3 fresnel = f0 + (f90 - f0) * voxel_forward_schlick(light_dot_half);
-			float distribution = voxel_forward_ggx_distribution(normal_dot_half, alpha);
-			float geometric_visibility = voxel_forward_ggx_visibility(normal_dot_light, normal_dot_view, alpha);
-			vec3 specular_brdf_nl = normal_dot_light * distribution * fresnel * geometric_visibility;
-			SPECULAR_LIGHT += specular_brdf_nl * LIGHT_COLOR * visibility * SPECULAR_AMOUNT;
+			// Point-like lights use one discrete specular response for the complete
+			// face. A screen-space GGX lobe makes tiny DDA side faces flare into the
+			// chunk-edge lines this renderer is designed to avoid.
+			float specular_power = mix(64.0, 4.0, ROUGHNESS);
+			float face_specular = pow(normal_dot_light, specular_power);
+			vec3 f0 = mix(vec3(0.04), ALBEDO, METALLIC);
+			SPECULAR_LIGHT += f0 * face_specular * LIGHT_COLOR * visibility * SPECULAR_AMOUNT;
 		}
 	}
 }
@@ -580,7 +570,7 @@ void fragment() {
 // OCCUPANCY_LIGHT
 )SHADER";
 
-static Ref<Shader> voxel_shader_cache[2][2][2][2];
+static Ref<Shader> voxel_shader_cache[2][2][2][2][2];
 
 void VoxelMaterial::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_shading_mode", "mode"), &VoxelMaterial::set_shading_mode);
@@ -641,14 +631,14 @@ void VoxelMaterial::_bind_methods() {
 }
 
 void VoxelMaterial::_rebuild_shader() {
-	const bool use_voxel_forward_mask = shading_mode == SHADING_MODE_PBR &&
-			RenderingMethod::is_current_voxel_forward_method() &&
+	const bool use_voxel_forward_lighting = shading_mode == SHADING_MODE_PBR && RenderingMethod::is_current_voxel_forward_method();
+	const bool use_voxel_forward_mask = use_voxel_forward_lighting &&
 			bool(GLOBAL_GET("rendering/voxel_forward/shadow_mask/enabled"));
 	// Voxel Forward is face-shaded by definition. Point and spot lights must use
 	// the same face-center receiver as directional visibility, so illumination
 	// cannot form a smooth gradient across an individual voxel face.
 	const bool use_face_center_lighting = RenderingMethod::is_current_voxel_forward_method() || lighting_position_mode == LIGHTING_POSITION_VOXEL_FACE_CENTER;
-	Ref<Shader> &voxel_shader = voxel_shader_cache[int(shading_mode)][transparency_enabled ? 1 : 0][use_voxel_forward_mask ? 1 : 0][use_face_center_lighting ? 1 : 0];
+	Ref<Shader> &voxel_shader = voxel_shader_cache[int(shading_mode)][transparency_enabled ? 1 : 0][use_voxel_forward_lighting ? 1 : 0][use_voxel_forward_mask ? 1 : 0][use_face_center_lighting ? 1 : 0];
 	if (voxel_shader.is_null()) {
 		voxel_shader.instantiate();
 		// One hardware-culled proxy layer covers the projected volume.
@@ -656,28 +646,51 @@ void VoxelMaterial::_rebuild_shader() {
 		code += transparency_enabled ? "depth_prepass_alpha" : "depth_draw_opaque";
 		if (shading_mode == SHADING_MODE_UNLIT) {
 			code += ", unshaded";
+		} else if (use_voxel_forward_lighting) {
+			// Voxel Forward owns direct and indirect lighting. Do not layer
+			// Forward+'s ambient or image-based reflections on top.
+			code += ", ambient_light_disabled";
 		}
 		String body = String(VOXEL_RAYMARCH_SHADER_PREFIX) + String(VOXEL_RAYMARCH_SHADER_SUFFIX);
 		body = body.replace("// TRANSPARENCY_UNIFORM", transparency_enabled ? "uniform sampler2D u_transparency : filter_nearest, repeat_disable;" : "");
 		body = body.replace("// TRANSPARENCY_OUTPUT", transparency_enabled ? "ALPHA = textureLod(u_transparency, palette_uv, 0.0).r;" : "");
 		body = body.replace("// LIGHTING_VERTEX_OUTPUT", use_face_center_lighting ? String(R"SHADER(
-	// Optional stylized mode: evaluate direct lighting once from the center of
-	// the visible voxel face. Visibility always remains at the exact hit.
+	// Optional stylized mode: evaluate direct and reflective lighting once from
+	// the center of the visible voxel face. Visibility remains at the exact hit.
 	vec3 lighting_voxel_position = vec3(hit_voxel) + vec3(0.5);
 	if (hit_axis >= 0) {
 		lighting_voxel_position[hit_axis] = float(hit_voxel[hit_axis]) + (local_normal[hit_axis] > 0.0 ? 1.0 : 0.0);
 	}
 	LIGHTING_VERTEX = (VIEW_MATRIX * MODEL_MATRIX * vec4(lighting_voxel_position * u_voxel_size, 1.0)).xyz;
 )SHADER") : String());
-		body = body.replace("// VOXEL_OCCUPANCY_ENABLE", use_voxel_forward_mask ? "VOXEL_OCCUPANCY_SHADOWS = true;" : "");
+		String voxel_forward_enable;
+		if (use_voxel_forward_lighting) {
+			voxel_forward_enable = "VOXEL_FACE_LIGHTING = true;";
+		}
+		if (use_voxel_forward_mask) {
+			voxel_forward_enable += "\n\tVOXEL_OCCUPANCY_SHADOWS = true;";
+		}
+		body = body.replace("// VOXEL_OCCUPANCY_ENABLE", voxel_forward_enable);
 		body = body.replace("// INDIRECT_LIGHT_OUTPUT", shading_mode == SHADING_MODE_PBR ? String(R"SHADER(
+	// Ambient belongs to Voxel Forward, not Forward+'s sky/IBL path. It is
+	// deliberately constant for every fragment of the voxel material color.
+	EMISSION += palette_color * voxel_forward_ambient_color.rgb * voxel_forward_ambient_energy;
 	vec3 indirect_local_position = (vec3(hit_voxel) + vec3(0.5) + local_normal * 0.5) * u_voxel_size;
 	vec3 indirect_world_normal = normalize(mat3(MODEL_MATRIX) * local_normal);
 	vec3 indirect_world_position = (MODEL_MATRIX * vec4(indirect_local_position, 1.0)).xyz + indirect_world_normal * voxel_forward_indirect_near_cell_size * 0.55;
 	vec3 indirect_light = sample_voxel_forward_indirect(indirect_world_position);
 	EMISSION += palette_color * indirect_light * (voxel_forward_indirect_intensity / PI);
+	if (voxel_forward_reflection_ready) {
+		// The resolve pass traces one ray from the shared-world face center, so this
+		// radiance is constant across the complete voxel face, including where two
+		// independently rendered volumes meet.
+		vec3 reflected_radiance = textureLod(voxel_forward_reflection, SCREEN_UV, 0.0).rgb;
+		vec3 reflection_f0 = mix(vec3(0.16 * SPECULAR * SPECULAR), palette_color * albedo_modulate.rgb, METALLIC);
+		float reflection_gloss = 1.0 - ROUGHNESS;
+		EMISSION += reflected_radiance * reflection_f0 * reflection_gloss * reflection_gloss * voxel_forward_reflection_intensity;
+	}
 )SHADER") : String());
-		body = body.replace("// OCCUPANCY_LIGHT", use_voxel_forward_mask ? String(VOXEL_FORWARD_MASK_LIGHT_BODY) : String());
+		body = body.replace("// OCCUPANCY_LIGHT", use_voxel_forward_lighting ? String(VOXEL_FORWARD_LIGHT_BODY) : String());
 		code += ";\n" + body;
 		voxel_shader->set_code(code);
 	}
@@ -857,9 +870,11 @@ void VoxelMaterial::ensure_shader() {
 void VoxelMaterial::clear_shader_cache() {
 	for (int shading = 0; shading < 2; shading++) {
 		for (int transparency = 0; transparency < 2; transparency++) {
-			for (int voxel_forward_mask = 0; voxel_forward_mask < 2; voxel_forward_mask++) {
-				for (int lighting_position = 0; lighting_position < 2; lighting_position++) {
-					voxel_shader_cache[shading][transparency][voxel_forward_mask][lighting_position].unref();
+			for (int voxel_forward_lighting = 0; voxel_forward_lighting < 2; voxel_forward_lighting++) {
+				for (int voxel_forward_mask = 0; voxel_forward_mask < 2; voxel_forward_mask++) {
+					for (int lighting_position = 0; lighting_position < 2; lighting_position++) {
+						voxel_shader_cache[shading][transparency][voxel_forward_lighting][voxel_forward_mask][lighting_position].unref();
+					}
 				}
 			}
 		}

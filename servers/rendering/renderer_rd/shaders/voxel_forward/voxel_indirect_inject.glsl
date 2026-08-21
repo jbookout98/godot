@@ -92,7 +92,9 @@ float shadow_visibility(vec3 world_position) {
 }
 
 void main() {
-	ivec3 cell = ivec3(gl_GlobalInvocationID.xyz);
+	uint packed_dispatch_origin = uint(params.grid_directory.w);
+	ivec3 dispatch_origin = ivec3(packed_dispatch_origin & 0xffu, (packed_dispatch_origin >> 8u) & 0xffu, (packed_dispatch_origin >> 16u) & 0xffu);
+	ivec3 cell = dispatch_origin + ivec3(gl_GlobalInvocationID.xyz);
 	int resolution = params.grid_directory.x;
 	if (any(greaterThanEqual(cell, ivec3(resolution)))) {
 		return;

@@ -313,6 +313,12 @@ half sample_directional_pcf_shadow(texture2D shadow, vec2 shadow_pixel_size, vec
 	vec2 pos = coord.xy;
 	float depth = coord.z;
 
+	// A voxel face has one visibility answer. Sampling the center once keeps the
+	// shadow crisp and avoids repeating a PCF kernel for every fragment.
+#ifdef VOXEL_FACE_LIGHTING_USED
+	return half(textureProj(sampler2DShadow(shadow, shadow_sampler), vec4(pos, depth, 1.0)));
+#endif
+
 	//if only one sample is taken, take it from the center
 	if (sc_directional_soft_shadow_samples() == 0) {
 		return half(textureProj(sampler2DShadow(shadow, shadow_sampler), vec4(pos, depth, 1.0)));
@@ -320,7 +326,11 @@ half sample_directional_pcf_shadow(texture2D shadow, vec2 shadow_pixel_size, vec
 
 	mat2 disk_rotation;
 	{
-		float r = quick_hash(gl_FragCoord.xy + vec2(taa_frame_count * 5.588238)) * 2.0 * M_PI;
+		vec2 noise_position = gl_FragCoord.xy;
+#ifdef VOXEL_FACE_LIGHTING_USED
+		noise_position = vec2(0.0);
+#endif
+		float r = quick_hash(noise_position + vec2(taa_frame_count * 5.588238)) * 2.0 * M_PI;
 		float sr = sin(r);
 		float cr = cos(r);
 		disk_rotation = mat2(vec2(cr, -sr), vec2(sr, cr));
@@ -340,6 +350,10 @@ half sample_pcf_shadow(texture2D shadow, vec2 shadow_pixel_size, vec3 coord, flo
 	vec2 pos = coord.xy;
 	float depth = coord.z;
 
+#ifdef VOXEL_FACE_LIGHTING_USED
+	return half(textureProj(sampler2DShadow(shadow, shadow_sampler), vec4(pos, depth, 1.0)));
+#endif
+
 	//if only one sample is taken, take it from the center
 	if (sc_soft_shadow_samples() == 0) {
 		return half(textureProj(sampler2DShadow(shadow, shadow_sampler), vec4(pos, depth, 1.0)));
@@ -347,7 +361,11 @@ half sample_pcf_shadow(texture2D shadow, vec2 shadow_pixel_size, vec3 coord, flo
 
 	mat2 disk_rotation;
 	{
-		float r = quick_hash(gl_FragCoord.xy + vec2(taa_frame_count * 5.588238)) * 2.0 * M_PI;
+		vec2 noise_position = gl_FragCoord.xy;
+#ifdef VOXEL_FACE_LIGHTING_USED
+		noise_position = vec2(0.0);
+#endif
+		float r = quick_hash(noise_position + vec2(taa_frame_count * 5.588238)) * 2.0 * M_PI;
 		float sr = sin(r);
 		float cr = cos(r);
 		disk_rotation = mat2(vec2(cr, -sr), vec2(sr, cr));
@@ -364,6 +382,12 @@ half sample_pcf_shadow(texture2D shadow, vec2 shadow_pixel_size, vec3 coord, flo
 }
 
 half sample_omni_pcf_shadow(texture2D shadow, float blur_scale, vec2 coord, vec4 uv_rect, vec2 flip_offset, float depth, float taa_frame_count) {
+	#ifdef VOXEL_FACE_LIGHTING_USED
+	vec2 face_center_position = coord * 0.5 + 0.5;
+	face_center_position = uv_rect.xy + face_center_position * uv_rect.zw;
+	return half(textureProj(sampler2DShadow(shadow, shadow_sampler), vec4(face_center_position, depth, 1.0)));
+#endif
+
 	//if only one sample is taken, take it from the center
 	if (sc_soft_shadow_samples() == 0) {
 		vec2 pos = coord * 0.5 + 0.5;
@@ -373,7 +397,11 @@ half sample_omni_pcf_shadow(texture2D shadow, float blur_scale, vec2 coord, vec4
 
 	mat2 disk_rotation;
 	{
-		float r = quick_hash(gl_FragCoord.xy + vec2(taa_frame_count * 5.588238)) * 2.0 * M_PI;
+		vec2 noise_position = gl_FragCoord.xy;
+#ifdef VOXEL_FACE_LIGHTING_USED
+		noise_position = vec2(0.0);
+#endif
+		float r = quick_hash(noise_position + vec2(taa_frame_count * 5.588238)) * 2.0 * M_PI;
 		float sr = sin(r);
 		float cr = cos(r);
 		disk_rotation = mat2(vec2(cr, -sr), vec2(sr, cr));
@@ -408,13 +436,21 @@ half sample_omni_pcf_shadow(texture2D shadow, float blur_scale, vec2 coord, vec4
 }
 
 half sample_directional_soft_shadow(texture2D shadow, vec3 pssm_coord, vec2 tex_scale, float taa_frame_count) {
+	#ifdef VOXEL_FACE_LIGHTING_USED
+	return half(textureProj(sampler2DShadow(shadow, shadow_sampler), vec4(pssm_coord.xy, pssm_coord.z, 1.0)));
+#endif
+
 	//find blocker
 	float blocker_count = 0.0;
 	float blocker_average = 0.0;
 
 	mat2 disk_rotation;
 	{
-		float r = quick_hash(gl_FragCoord.xy + vec2(taa_frame_count * 5.588238)) * 2.0 * M_PI;
+		vec2 noise_position = gl_FragCoord.xy;
+#ifdef VOXEL_FACE_LIGHTING_USED
+		noise_position = vec2(0.0);
+#endif
+		float r = quick_hash(noise_position + vec2(taa_frame_count * 5.588238)) * 2.0 * M_PI;
 		float sr = sin(r);
 		float cr = cos(r);
 		disk_rotation = mat2(vec2(cr, -sr), vec2(sr, cr));
@@ -497,7 +533,6 @@ void light_process_omni(uint idx, vec3 vertex, vec3 lighting_vertex, bool use_vo
 	}
 
 	half shadow = half(1.0);
-#if !defined(VOXEL_OCCUPANCY_SHADOWS_USED) || !defined(VOXEL_OCCUPANCY_AVAILABLE)
 #ifndef SHADOWS_DISABLED
 	// Omni light shadow.
 	if (omni_attenuation > HALF_FLT_MIN && omni_lights.data[idx].shadow_opacity > 0.001) {
@@ -510,7 +545,7 @@ void light_process_omni(uint idx, vec3 vertex, vec3 lighting_vertex, bool use_vo
 		// Omni lights use direction.xy to store to store the offset between the two paraboloid regions
 		vec2 flip_offset = omni_lights.data[idx].direction.xy;
 
-		vec3 local_vert = (omni_lights.data[idx].shadow_matrix * vec4(vertex, 1.0)).xyz;
+		vec3 local_vert = (omni_lights.data[idx].shadow_matrix * vec4(lighting_vertex, 1.0)).xyz;
 
 		float shadow_len = length(local_vert); //need to remember shadow len from here
 		vec3 shadow_dir = normalize(local_vert);
@@ -518,7 +553,11 @@ void light_process_omni(uint idx, vec3 vertex, vec3 lighting_vertex, bool use_vo
 		vec3 local_normal = normalize(mat3(omni_lights.data[idx].shadow_matrix) * vec3(normal));
 		vec3 normal_bias = local_normal * omni_lights.data[idx].shadow_normal_bias * (1.0 - abs(dot(local_normal, shadow_dir)));
 
+#ifdef VOXEL_FACE_LIGHTING_USED
+		if (false) {
+#else
 		if (sc_use_light_soft_shadows() && omni_lights.data[idx].soft_shadow_size > 0.0) {
+#endif
 			//soft shadow
 
 			//find blocker
@@ -528,7 +567,11 @@ void light_process_omni(uint idx, vec3 vertex, vec3 lighting_vertex, bool use_vo
 
 			mat2 disk_rotation;
 			{
-				float r = quick_hash(gl_FragCoord.xy + vec2(taa_frame_count * 5.588238)) * 2.0 * M_PI;
+				vec2 noise_position = gl_FragCoord.xy;
+#ifdef VOXEL_FACE_LIGHTING_USED
+				noise_position = lighting_vertex.xy * 1024.0;
+#endif
+				float r = quick_hash(noise_position + vec2(taa_frame_count * 5.588238)) * 2.0 * M_PI;
 				float sr = sin(r);
 				float cr = cos(r);
 				disk_rotation = mat2(vec2(cr, -sr), vec2(sr, cr));
@@ -628,7 +671,7 @@ void light_process_omni(uint idx, vec3 vertex, vec3 lighting_vertex, bool use_vo
 		}
 	}
 #endif
-#elif defined(VOXEL_OCCUPANCY_AVAILABLE)
+#if defined(VOXEL_OCCUPANCY_SHADOWS_USED) && defined(VOXEL_OCCUPANCY_AVAILABLE)
 	if (use_voxel_occupancy_shadow && omni_attenuation > HALF_FLT_MIN && omni_lights.data[idx].shadow_opacity > 0.001) {
 		// Use the same representative point as direct lighting. For voxel-face
 		// mode this makes visibility constant across the complete receiver face;
@@ -636,7 +679,7 @@ void light_process_omni(uint idx, vec3 vertex, vec3 lighting_vertex, bool use_vo
 		vec3 shadow_light_vector = omni_lights.data[idx].position - lighting_vertex;
 		float shadow_light_distance = length(shadow_light_vector);
 		float occupancy_visibility = voxel_occupancy_local_shadow(lighting_vertex, vec3(normal), shadow_light_vector / max(shadow_light_distance, 0.0001), shadow_light_distance);
-		shadow = half(mix(1.0, occupancy_visibility, omni_lights.data[idx].shadow_opacity));
+		shadow *= half(mix(1.0, occupancy_visibility, omni_lights.data[idx].shadow_opacity));
 	}
 #endif
 
@@ -819,20 +862,23 @@ void light_process_spot(uint idx, vec3 vertex, vec3 lighting_vertex, bool use_vo
 	}
 
 	half shadow = half(1.0);
-#if !defined(VOXEL_OCCUPANCY_SHADOWS_USED) || !defined(VOXEL_OCCUPANCY_AVAILABLE)
 #ifndef SHADOWS_DISABLED
 	// Spot light shadow.
 	if (spot_attenuation > HALF_FLT_MIN && spot_lights.data[idx].shadow_opacity > 0.001) {
 		vec3 normal_bias = vec3(normal) * light_length * spot_lights.data[idx].shadow_normal_bias * (1.0 - abs(dot(normal, light_rel_vec_norm)));
 
 		//there is a shadowmap
-		vec4 v = vec4(vertex + normal_bias, 1.0);
+		vec4 v = vec4(lighting_vertex + normal_bias, 1.0);
 
 		vec4 splane = (spot_lights.data[idx].shadow_matrix * v);
 		splane.z += spot_lights.data[idx].shadow_bias;
 		splane /= splane.w;
 
+#ifdef VOXEL_FACE_LIGHTING_USED
+		if (false) {
+#else
 		if (sc_use_light_soft_shadows() && spot_lights.data[idx].soft_shadow_size > 0.0) {
+#endif
 			//soft shadow
 
 			//find blocker
@@ -845,7 +891,11 @@ void light_process_spot(uint idx, vec3 vertex, vec3 lighting_vertex, bool use_vo
 
 			mat2 disk_rotation;
 			{
-				float r = quick_hash(gl_FragCoord.xy + vec2(taa_frame_count * 5.588238)) * 2.0 * M_PI;
+				vec2 noise_position = gl_FragCoord.xy;
+#ifdef VOXEL_FACE_LIGHTING_USED
+				noise_position = lighting_vertex.xy * 1024.0;
+#endif
+				float r = quick_hash(noise_position + vec2(taa_frame_count * 5.588238)) * 2.0 * M_PI;
 				float sr = sin(r);
 				float cr = cos(r);
 				disk_rotation = mat2(vec2(cr, -sr), vec2(sr, cr));
@@ -894,12 +944,12 @@ void light_process_spot(uint idx, vec3 vertex, vec3 lighting_vertex, bool use_vo
 		}
 	}
 #endif // SHADOWS_DISABLED
-#elif defined(VOXEL_OCCUPANCY_AVAILABLE)
+#if defined(VOXEL_OCCUPANCY_SHADOWS_USED) && defined(VOXEL_OCCUPANCY_AVAILABLE)
 	if (use_voxel_occupancy_shadow && spot_attenuation > HALF_FLT_MIN && spot_lights.data[idx].shadow_opacity > 0.001) {
 		vec3 shadow_light_vector = spot_lights.data[idx].position - lighting_vertex;
 		float shadow_light_distance = length(shadow_light_vector);
 		float occupancy_visibility = voxel_occupancy_local_shadow(lighting_vertex, vec3(normal), shadow_light_vector / max(shadow_light_distance, 0.0001), shadow_light_distance);
-		shadow = half(mix(1.0, occupancy_visibility, spot_lights.data[idx].shadow_opacity));
+		shadow *= half(mix(1.0, occupancy_visibility, spot_lights.data[idx].shadow_opacity));
 	}
 #endif
 
@@ -976,7 +1026,7 @@ void light_process_spot(uint idx, vec3 vertex, vec3 lighting_vertex, bool use_vo
 }
 
 // implementation of area lights with Linearly Transformed Cosines (LTC): https://eheitzresearch.wordpress.com/415-2/
-void light_process_area(uint idx, vec3 vertex, hvec3 eye_vec, hvec3 normal, vec3 vertex_ddx, vec3 vertex_ddy, hvec3 f0, half roughness, half metallic, float taa_frame_count, hvec3 albedo, inout half alpha, vec2 screen_uv, hvec3 energy_compensation,
+void light_process_area(uint idx, vec3 vertex, vec3 lighting_vertex, hvec3 eye_vec, hvec3 normal, vec3 vertex_ddx, vec3 vertex_ddy, hvec3 f0, half roughness, half metallic, float taa_frame_count, hvec3 albedo, inout half alpha, vec2 screen_uv, hvec3 energy_compensation,
 #ifdef LIGHT_BACKLIGHT_USED
 		hvec3 backlight,
 #endif
@@ -1003,7 +1053,7 @@ void light_process_area(uint idx, vec3 vertex, hvec3 eye_vec, hvec3 normal, vec3
 		return;
 	}
 
-	if (dot(area_lights.data[idx].direction, vertex - area_lights.data[idx].position) <= 0) {
+	if (dot(area_lights.data[idx].direction, lighting_vertex - area_lights.data[idx].position) <= 0) {
 		return; // vertex is behind light
 	}
 
@@ -1012,7 +1062,7 @@ void light_process_area(uint idx, vec3 vertex, hvec3 eye_vec, hvec3 normal, vec3
 	half a_half_len = a_len / half(2.0);
 	half b_half_len = b_len / half(2.0);
 	hvec3 light_center = hvec3(area_lights.data[idx].position);
-	hvec3 light_to_vert = hvec3(vertex) - light_center;
+	hvec3 light_to_vert = hvec3(lighting_vertex) - light_center;
 	hvec3 area_a_dir = normalize(area_width);
 	hvec3 area_b_dir = normalize(area_height);
 	hvec3 area_direction = hvec3(area_lights.data[idx].direction);
@@ -1035,7 +1085,9 @@ void light_process_area(uint idx, vec3 vertex, hvec3 eye_vec, hvec3 normal, vec3
 		base_uv_rect.xy += texel_size;
 		base_uv_rect.zw -= texel_size * 2.0;
 
-		vec3 local_vert = (area_lights.data[idx].shadow_matrix * vec4(vertex, 1.0)).xyz;
+		// Raymarched voxel materials pass a face-center lighting vertex. Sampling
+		// the shadow map there makes dynamic mesh shadows constant per voxel face.
+		vec3 local_vert = (area_lights.data[idx].shadow_matrix * vec4(lighting_vertex, 1.0)).xyz;
 
 		float shadow_len = length(local_vert); //need to remember shadow len from here
 		vec3 shadow_dir = normalize(local_vert);
@@ -1055,7 +1107,11 @@ void light_process_area(uint idx, vec3 vertex, hvec3 eye_vec, hvec3 normal, vec3
 
 			mat2 disk_rotation;
 			{
-				float r = quick_hash(gl_FragCoord.xy + vec2(taa_frame_count * 5.588238)) * 2.0 * M_PI;
+				vec2 noise_position = gl_FragCoord.xy;
+#ifdef VOXEL_FACE_LIGHTING_USED
+				noise_position = lighting_vertex.xy * 1024.0;
+#endif
+				float r = quick_hash(noise_position + vec2(taa_frame_count * 5.588238)) * 2.0 * M_PI;
 				float sr = sin(r);
 				float cr = cos(r);
 				disk_rotation = mat2(vec2(cr, -sr), vec2(sr, cr));
@@ -1139,7 +1195,15 @@ void light_process_area(uint idx, vec3 vertex, hvec3 eye_vec, hvec3 normal, vec3
 			float depth = shadow_len - area_lights.data[idx].shadow_bias;
 			depth *= inv_center_range;
 			depth = 1.0 - depth;
+#ifdef VOXEL_FACE_LIGHTING_USED
+			// A single center sample is the voxelized shadow answer. Screen-space
+			// PCF rotation would otherwise vary across pixels of the same face.
+			vec2 face_shadow_position = pos * 0.5 + 0.5;
+			face_shadow_position = uv_rect.xy + face_shadow_position * uv_rect.zw;
+			shadow = mix(half(1.0), half(textureProj(sampler2DShadow(shadow_atlas, shadow_sampler), vec4(face_shadow_position, depth, 1.0))), half(area_lights.data[idx].shadow_opacity));
+#else
 			shadow = mix(half(1.0), sample_omni_pcf_shadow(shadow_atlas, area_lights.data[idx].soft_shadow_scale / shadow_sample.z, pos, uv_rect, vec2(0), depth, taa_frame_count), half(area_lights.data[idx].shadow_opacity));
+#endif
 		}
 	}
 #endif
@@ -1151,10 +1215,10 @@ void light_process_area(uint idx, vec3 vertex, hvec3 eye_vec, hvec3 normal, vec3
 	vec3 points[4];
 	hvec3 h_area_width = area_width / half(2.0);
 	hvec3 h_area_height = area_height / half(2.0);
-	points[0] = area_lights.data[idx].position - h_area_width - h_area_height - vertex;
-	points[1] = area_lights.data[idx].position + h_area_width - h_area_height - vertex;
-	points[2] = area_lights.data[idx].position + h_area_width + h_area_height - vertex;
-	points[3] = area_lights.data[idx].position - h_area_width + h_area_height - vertex;
+	points[0] = area_lights.data[idx].position - h_area_width - h_area_height - lighting_vertex;
+	points[1] = area_lights.data[idx].position + h_area_width - h_area_height - lighting_vertex;
+	points[2] = area_lights.data[idx].position + h_area_width + h_area_height - lighting_vertex;
+	points[3] = area_lights.data[idx].position - h_area_width + h_area_height - lighting_vertex;
 
 	float ltc_diffuse = 0.0;
 	vec3 ltc_diffuse_tex_color = vec3(1.0);
@@ -1207,7 +1271,7 @@ void light_process_area(uint idx, vec3 vertex, hvec3 eye_vec, hvec3 normal, vec3
 	vec3 albedo_highp = vec3(albedo);
 	float alpha_highp = float(alpha);
 	vec3 normal_highp = vec3(normal);
-	vec3 light_highp = (light_center - vertex) / light_length;
+	vec3 light_highp = normalize(vec3(light_center) - lighting_vertex);
 	vec3 view_highp = vec3(eye_vec);
 	float specular_amount_highp = float(area_lights.data[idx].specular_amount);
 	vec3 light_color_highp = vec3(color);

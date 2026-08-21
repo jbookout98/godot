@@ -720,6 +720,7 @@ void SceneShaderForwardMobile::init(const String p_defines) {
 		actions.renames["CUSTOM3"] = "custom3_attrib";
 		actions.renames["LIGHT_VERTEX"] = "light_vertex";
 		actions.renames["LIGHTING_VERTEX"] = "lighting_vertex";
+		actions.renames["VOXEL_FACE_LIGHTING"] = "voxel_face_lighting";
 		actions.renames["VOXEL_OCCUPANCY_SHADOWS"] = "voxel_occupancy_shadows";
 
 		actions.renames["NODE_POSITION_WORLD"] = "read_model_matrix[3].xyz";
@@ -778,6 +779,7 @@ void SceneShaderForwardMobile::init(const String p_defines) {
 		actions.usage_defines["LIGHT_AREA_SPECULAR_MULTIPLIER"] = "@LIGHT_AREA_DIFFUSE_MULTIPLIER";
 		actions.usage_defines["LIGHT_IS_AREA"] = "@LIGHT_AREA_DIFFUSE_MULTIPLIER";
 		actions.usage_defines["LIGHTING_VERTEX"] = "#define LIGHTING_VERTEX_USED\n";
+		actions.usage_defines["VOXEL_FACE_LIGHTING"] = "#define VOXEL_FACE_LIGHTING_USED\n";
 		actions.usage_defines["VOXEL_OCCUPANCY_SHADOWS"] = "#define VOXEL_OCCUPANCY_SHADOWS_USED\n";
 
 		actions.usage_defines["ALPHA_SCISSOR_THRESHOLD"] = "#define ALPHA_SCISSOR_USED\n";

@@ -15,7 +15,11 @@ class GodotVoxelShape3D : public GodotShape3D {
 	struct PhysicsBrickCache {
 		bool initialized = false;
 		bool uniform_solid = false;
+		uint64_t solid_bits[8] = {};
+		uint64_t surface_bits[8] = {};
+		uint64_t face_bits[8] = {};
 		uint64_t edge_bits[8] = {};
+		uint64_t corner_bits[8] = {};
 		Vector<uint16_t> solid_local_indices;
 		Vector<uint16_t> surface_local_indices;
 		Vector<uint16_t> face_local_indices;
@@ -47,6 +51,7 @@ class GodotVoxelShape3D : public GodotShape3D {
 	void _ensure_brick_cache(int p_brick_index) const;
 	void _ensure_all_brick_caches() const;
 	void _rebuild_mass_properties() const;
+	bool _brick_local_matches_feature(int p_brick_index, int p_local_index, int p_feature) const;
 	bool _find_next_index(int p_feature, bool p_bounded, const Vector3i &p_from, const Vector3i &p_to, int &r_brick_index, int &r_cursor, int &r_index) const;
 
 public:

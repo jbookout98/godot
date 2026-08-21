@@ -139,6 +139,7 @@ ShaderTypes::ShaderTypes() {
 	// Let raymarched and impostor geometry keep the exact receiver position for
 	// depth/shadows while evaluating direct lighting at a stable representative point.
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["LIGHTING_VERTEX"] = ShaderLanguage::TYPE_VEC3;
+	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["VOXEL_FACE_LIGHTING"] = ShaderLanguage::TYPE_BOOL;
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["VOXEL_OCCUPANCY_SHADOWS"] = ShaderLanguage::TYPE_BOOL;
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["FRAGCOORD"] = constt(ShaderLanguage::TYPE_VEC4);
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["FRONT_FACING"] = constt(ShaderLanguage::TYPE_BOOL);

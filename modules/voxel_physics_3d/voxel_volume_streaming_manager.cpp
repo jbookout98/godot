@@ -9,6 +9,8 @@
 #include "servers/rendering/rendering_server.h"
 #include "voxel_volume_3d.h"
 
+#include "core/templates/hash_map.h"
+
 #include <cstring>
 
 VoxelVolumeStreamingManager *VoxelVolumeStreamingManager::singleton = nullptr;
@@ -41,16 +43,16 @@ static constexpr const char *VOXEL_FORWARD_INDIRECT_RESOLUTION_NAME = "voxel_for
 static constexpr const char *VOXEL_FORWARD_INDIRECT_TRANSITION_CELLS_NAME = "voxel_forward_indirect_transition_cells";
 static constexpr const char *VOXEL_FORWARD_INDIRECT_INTENSITY_NAME = "voxel_forward_indirect_intensity";
 static constexpr const char *VOXEL_FORWARD_INDIRECT_READY_NAME = "voxel_forward_indirect_ready";
+static constexpr const char *VOXEL_FORWARD_AMBIENT_COLOR_NAME = "voxel_forward_ambient_color";
+static constexpr const char *VOXEL_FORWARD_AMBIENT_ENERGY_NAME = "voxel_forward_ambient_energy";
+static constexpr const char *VOXEL_FORWARD_REFLECTION_NAME = "voxel_forward_reflection";
+static constexpr const char *VOXEL_FORWARD_REFLECTION_READY_NAME = "voxel_forward_reflection_ready";
+static constexpr const char *VOXEL_FORWARD_REFLECTION_INTENSITY_NAME = "voxel_forward_reflection_intensity";
 
 struct VoxelStreamingCandidate {
 	VoxelVolume3D *volume = nullptr;
 	real_t distance_squared = 0.0;
 	bool operator<(const VoxelStreamingCandidate &p_other) const { return distance_squared < p_other.distance_squared; }
-};
-
-struct VoxelNeighborSet {
-	VoxelVolume3D *volume = nullptr;
-	VoxelVolume3D *faces[VoxelVolume3D::NEIGHBOR_FACE_COUNT] = {};
 };
 
 static int _get_neighbor_face(const VoxelVolume3D *p_volume, const VoxelVolume3D *p_other) {
@@ -98,6 +100,88 @@ static int _get_neighbor_face(const VoxelVolume3D *p_volume, const VoxelVolume3D
 		return VoxelVolume3D::NEIGHBOR_POSITIVE_Z;
 	}
 	return -1;
+}
+
+struct VoxelNeighborFaceCandidate {
+	VoxelVolume3D *volume = nullptr;
+	int face = -1;
+};
+
+using VoxelNeighborFaceIndex = HashMap<Vector3i, Vector<VoxelNeighborFaceCandidate>>;
+
+static Vector3 _get_neighbor_face_center(const VoxelVolume3D *p_volume, int p_face) {
+	const Ref<VoxelShapeData> data = p_volume->get_voxel_data();
+	if (data.is_null()) {
+		return p_volume->get_global_position();
+	}
+	const Vector3 size = Vector3(data->get_dimensions()) * data->get_voxel_size();
+	Vector3 center = size * real_t(0.5);
+	switch (p_face) {
+		case VoxelVolume3D::NEIGHBOR_NEGATIVE_X: center.x = 0.0; break;
+		case VoxelVolume3D::NEIGHBOR_POSITIVE_X: center.x = size.x; break;
+		case VoxelVolume3D::NEIGHBOR_NEGATIVE_Y: center.y = 0.0; break;
+		case VoxelVolume3D::NEIGHBOR_POSITIVE_Y: center.y = size.y; break;
+		case VoxelVolume3D::NEIGHBOR_NEGATIVE_Z: center.z = 0.0; break;
+		case VoxelVolume3D::NEIGHBOR_POSITIVE_Z: center.z = size.z; break;
+	}
+	return p_volume->get_global_transform().xform(center);
+}
+
+static Vector3i _get_neighbor_face_cell(const Vector3 &p_position) {
+	// The exact cell size is not significant: matching faces have the same world
+	// center. Neighboring buckets are queried to preserve the transform tolerance
+	// when a center lies directly on a hash-cell boundary.
+	static constexpr real_t CELL_SIZE = 1.0;
+	return Vector3i(
+			int(Math::floor(p_position.x / CELL_SIZE)),
+			int(Math::floor(p_position.y / CELL_SIZE)),
+			int(Math::floor(p_position.z / CELL_SIZE)));
+}
+
+static void _build_neighbor_face_index(const Vector<VoxelVolume3D *> &p_volumes, VoxelNeighborFaceIndex &r_index) {
+	for (VoxelVolume3D *volume : p_volumes) {
+		if (volume == nullptr || !volume->is_streaming_resident() || volume->get_voxel_data().is_null()) {
+			continue;
+		}
+		for (int face = 0; face < VoxelVolume3D::NEIGHBOR_FACE_COUNT; face++) {
+			const Vector3i cell = _get_neighbor_face_cell(_get_neighbor_face_center(volume, face));
+			Vector<VoxelNeighborFaceCandidate> *bucket = r_index.getptr(cell);
+			if (bucket == nullptr) {
+				r_index.insert(cell, Vector<VoxelNeighborFaceCandidate>());
+				bucket = r_index.getptr(cell);
+			}
+			VoxelNeighborFaceCandidate candidate;
+			candidate.volume = volume;
+			candidate.face = face;
+			bucket->push_back(candidate);
+		}
+	}
+}
+
+static void _find_neighbor_faces(VoxelVolume3D *p_target, const VoxelNeighborFaceIndex &p_index, VoxelVolume3D *r_faces[VoxelVolume3D::NEIGHBOR_FACE_COUNT]) {
+	for (int face = 0; face < VoxelVolume3D::NEIGHBOR_FACE_COUNT; face++) {
+		const Vector3i center_cell = _get_neighbor_face_cell(_get_neighbor_face_center(p_target, face));
+		const int opposite_face = face ^ 1;
+		for (int z = -1; z <= 1 && r_faces[face] == nullptr; z++) {
+			for (int y = -1; y <= 1 && r_faces[face] == nullptr; y++) {
+				for (int x = -1; x <= 1 && r_faces[face] == nullptr; x++) {
+					const Vector<VoxelNeighborFaceCandidate> *bucket = p_index.getptr(center_cell + Vector3i(x, y, z));
+					if (bucket == nullptr) {
+						continue;
+					}
+					for (const VoxelNeighborFaceCandidate &candidate : *bucket) {
+						if (candidate.volume == p_target || candidate.face != opposite_face) {
+							continue;
+						}
+						if (_get_neighbor_face(p_target, candidate.volume) == face) {
+							r_faces[face] = candidate.volume;
+							break;
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 VoxelVolumeStreamingManager::VoxelVolumeStreamingManager() {
@@ -155,7 +239,7 @@ void VoxelVolumeStreamingManager::_process_frame() {
 	// Loading a large resident set is deliberately spread over several frames.
 	// Rebuilding all adjacency and occupancy data after every small batch would
 	// turn that amortization back into a startup stall.
-	if (!streaming_pending && neighbors_dirty) {
+	if (!streaming_pending && (neighbors_dirty || !neighbor_rebuild_queue.is_empty())) {
 		_update_neighbors();
 	} else if (!streaming_pending && !neighbor_refresh_volumes.is_empty()) {
 		_update_dirty_neighbors();
@@ -227,6 +311,11 @@ void VoxelVolumeStreamingManager::_register_occupancy_globals() {
 	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_INDIRECT_TRANSITION_CELLS_NAME, RSE::GLOBAL_VAR_TYPE_FLOAT, 1.0);
 	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_INDIRECT_INTENSITY_NAME, RSE::GLOBAL_VAR_TYPE_FLOAT, 0.0);
 	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_INDIRECT_READY_NAME, RSE::GLOBAL_VAR_TYPE_BOOL, false);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_AMBIENT_COLOR_NAME, RSE::GLOBAL_VAR_TYPE_COLOR, Color(0.22, 0.22, 0.22));
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_AMBIENT_ENERGY_NAME, RSE::GLOBAL_VAR_TYPE_FLOAT, 1.0);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_REFLECTION_NAME, RSE::GLOBAL_VAR_TYPE_SAMPLER2D, RID());
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_REFLECTION_READY_NAME, RSE::GLOBAL_VAR_TYPE_BOOL, false);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_REFLECTION_INTENSITY_NAME, RSE::GLOBAL_VAR_TYPE_FLOAT, 1.0);
 }
 
 void VoxelVolumeStreamingManager::_unregister_occupancy_globals() {
@@ -513,23 +602,11 @@ void VoxelVolumeStreamingManager::_update_streaming() {
 		volumes.erase(id);
 	}
 	candidates.sort();
+	// Texture creation and material setup happen synchronously when residency is
+	// enabled. Honor the configured budget during the initial fill as well as
+	// later streaming so large scenes do not collapse all of that work into a
+	// handful of long frames.
 	int remaining_loads = configured_loads;
-	if (initial_residency_fill) {
-		int initial_pending_count = 0;
-		const int initial_candidate_count = MIN(candidates.size(), max_resident);
-		for (int i = 0; i < initial_candidate_count; i++) {
-			initial_pending_count += candidates[i].volume->is_streaming_resident() ? 0 : 1;
-		}
-		// A fixed low streaming budget makes shadows appear many frames after
-		// a large scene has loaded because the world table cannot be finalized
-		// until residency stops changing. Complete only the initial fill in
-		// roughly eight batches, while retaining the configured low budget for
-		// later camera-driven streaming during gameplay.
-		if (initial_load_batch_size == 0 && initial_pending_count > 0) {
-			initial_load_batch_size = CLAMP((initial_pending_count + 7) / 8, 1, 64);
-		}
-		remaining_loads = MAX(configured_loads, initial_load_batch_size);
-	}
 	for (int i = 0; i < candidates.size(); i++) {
 		VoxelVolume3D *volume = candidates[i].volume;
 		if (i >= max_resident) {
@@ -546,43 +623,54 @@ void VoxelVolumeStreamingManager::_update_streaming() {
 			streaming_pending = true;
 		}
 	}
-	if (!streaming_pending) {
-		initial_residency_fill = false;
-	}
 }
 
 void VoxelVolumeStreamingManager::_update_neighbors() {
-	neighbors_dirty = false;
-	neighbor_refresh_volumes.clear();
-	Vector<VoxelNeighborSet> sets;
+	// Finding neighbors and uploading every face texture in one call can stall a
+	// large streamed scene for more than a second. Reuse the residency budget so
+	// adjacency finalization has the same bounded per-frame cost as volume loads.
+	const int update_budget = CLAMP(int(GLOBAL_GET("rendering/voxel_volume/max_loads_per_frame")), 1, 64);
 	Vector<ObjectID> stale;
+	Vector<VoxelVolume3D *> live_volumes;
 	for (const ObjectID &id : volumes) {
 		VoxelVolume3D *volume = Object::cast_to<VoxelVolume3D>(ObjectDB::get_instance(id));
 		if (volume == nullptr) {
 			stale.push_back(id);
 			continue;
 		}
-		VoxelNeighborSet set;
-		set.volume = volume;
-		sets.push_back(set);
+		if (volume->is_streaming_resident()) {
+			live_volumes.push_back(volume);
+		}
 	}
 	for (const ObjectID &id : stale) {
 		volumes.erase(id);
 	}
-
-	for (int i = 0; i < sets.size(); i++) {
-		for (int j = 0; j < sets.size(); j++) {
-			if (i == j) {
-				continue;
-			}
-			const int face = _get_neighbor_face(sets[i].volume, sets[j].volume);
-			if (face >= 0 && sets[i].faces[face] == nullptr) {
-				sets.write[i].faces[face] = sets[j].volume;
-			}
+	if (neighbors_dirty) {
+		neighbors_dirty = false;
+		neighbor_refresh_volumes.clear();
+		neighbor_rebuild_queue.clear();
+		neighbor_rebuild_index = 0;
+		for (VoxelVolume3D *volume : live_volumes) {
+			neighbor_rebuild_queue.push_back(volume->get_instance_id());
 		}
 	}
-	for (VoxelNeighborSet &set : sets) {
-		set.volume->update_neighbor_faces(set.faces);
+	VoxelNeighborFaceIndex face_index;
+	_build_neighbor_face_index(live_volumes, face_index);
+
+	int updated = 0;
+	while (neighbor_rebuild_index < neighbor_rebuild_queue.size() && updated < update_budget) {
+		VoxelVolume3D *target = Object::cast_to<VoxelVolume3D>(ObjectDB::get_instance(neighbor_rebuild_queue[neighbor_rebuild_index++]));
+		if (target == nullptr) {
+			continue;
+		}
+		VoxelVolume3D *faces[VoxelVolume3D::NEIGHBOR_FACE_COUNT] = {};
+		_find_neighbor_faces(target, face_index, faces);
+		target->update_neighbor_faces(faces);
+		updated++;
+	}
+	if (neighbor_rebuild_index >= neighbor_rebuild_queue.size()) {
+		neighbor_rebuild_queue.clear();
+		neighbor_rebuild_index = 0;
 	}
 }
 
@@ -608,6 +696,8 @@ void VoxelVolumeStreamingManager::_update_dirty_neighbors() {
 	for (const ObjectID &id : stale) {
 		volumes.erase(id);
 	}
+	VoxelNeighborFaceIndex face_index;
+	_build_neighbor_face_index(live_volumes, face_index);
 
 	// A boundary edit changes the edited face and the reciprocal face on the
 	// adjacent volume. Expand only to those immediate neighbors.
@@ -620,9 +710,11 @@ void VoxelVolumeStreamingManager::_update_dirty_neighbors() {
 		if (edited == nullptr) {
 			continue;
 		}
-		for (VoxelVolume3D *candidate : live_volumes) {
-			if (candidate != edited && (_get_neighbor_face(edited, candidate) >= 0 || _get_neighbor_face(candidate, edited) >= 0)) {
-				affected.insert(candidate->get_instance_id());
+		VoxelVolume3D *faces[VoxelVolume3D::NEIGHBOR_FACE_COUNT] = {};
+		_find_neighbor_faces(edited, face_index, faces);
+		for (VoxelVolume3D *neighbor : faces) {
+			if (neighbor != nullptr) {
+				affected.insert(neighbor->get_instance_id());
 			}
 		}
 	}
@@ -633,15 +725,7 @@ void VoxelVolumeStreamingManager::_update_dirty_neighbors() {
 			continue;
 		}
 		VoxelVolume3D *faces[VoxelVolume3D::NEIGHBOR_FACE_COUNT] = {};
-		for (VoxelVolume3D *candidate : live_volumes) {
-			if (candidate == target) {
-				continue;
-			}
-			const int face = _get_neighbor_face(target, candidate);
-			if (face >= 0 && faces[face] == nullptr) {
-				faces[face] = candidate;
-			}
-		}
+		_find_neighbor_faces(target, face_index, faces);
 		target->update_neighbor_faces(faces);
 	}
 }

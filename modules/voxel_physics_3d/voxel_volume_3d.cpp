@@ -683,7 +683,14 @@ void VoxelVolume3D::set_streaming_resident(bool p_resident) {
 	streaming_resident = p_resident;
 	_rebuild_volume_textures();
 	if (VoxelVolumeStreamingManager::get_singleton() != nullptr) {
-		VoxelVolumeStreamingManager::get_singleton()->mark_neighbors_dirty();
+		if (p_resident) {
+			VoxelVolumeStreamingManager::get_singleton()->mark_volume_neighbors_dirty(this);
+		} else {
+			// Unloading also invalidates the previously adjacent resident volume.
+			// A full resident-only pass is rare and guarantees those stale slices
+			// are removed even though this volume is no longer in the face index.
+			VoxelVolumeStreamingManager::get_singleton()->mark_neighbors_dirty();
+		}
 		VoxelVolumeStreamingManager::get_singleton()->mark_occupancy_dirty();
 	}
 }
@@ -710,13 +717,12 @@ void VoxelVolume3D::update_neighbor_faces(VoxelVolume3D *const p_neighbors[NEIGH
 	neighbor_self_revision = self_revision;
 	neighbor_self_dimensions = self_dimensions;
 	neighbor_mask = 0;
-	neighbor_face_texture.unref();
+	const RID previous_neighbor_texture = neighbor_face_texture.is_valid() ? neighbor_face_texture->get_rid() : RID();
 	for (int face = 0; face < NEIGHBOR_FACE_COUNT; face++) {
 		neighbor_ids[face] = new_ids[face];
 		neighbor_revisions[face] = new_revisions[face];
 	}
 	if (voxel_data.is_null() || !streaming_resident) {
-		_update_material_bindings();
 		return;
 	}
 
@@ -760,10 +766,38 @@ void VoxelVolume3D::update_neighbor_faces(VoxelVolume3D *const p_neighbors[NEIGH
 		}
 	}
 	if (neighbor_mask != 0) {
-		neighbor_face_texture = _create_texture_3d(
-				face_bytes, Vector3i(side, side, NEIGHBOR_FACE_COUNT), Image::FORMAT_L8, 1);
+		if (neighbor_face_texture.is_valid() && neighbor_face_texture->get_width() == side && neighbor_face_texture->get_height() == side &&
+				neighbor_face_texture->get_depth() == NEIGHBOR_FACE_COUNT) {
+			Vector<Ref<Image>> slices;
+			slices.resize(NEIGHBOR_FACE_COUNT);
+			const int slice_size = side * side;
+			for (int face = 0; face < NEIGHBOR_FACE_COUNT; face++) {
+				PackedByteArray slice;
+				slice.resize(slice_size);
+				std::memcpy(slice.ptrw(), face_bytes.ptr() + face * slice_size, slice_size);
+				slices.write[face] = Image::create_from_data(side, side, false, Image::FORMAT_L8, slice);
+			}
+			neighbor_face_texture->update(slices);
+		} else {
+			neighbor_face_texture = _create_texture_3d(
+					face_bytes, Vector3i(side, side, NEIGHBOR_FACE_COUNT), Image::FORMAT_L8, 1);
+		}
+	} else {
+		neighbor_face_texture.unref();
 	}
-	_update_material_bindings();
+	// Only these two uniforms changed. A full material rebind would also repack
+	// and resend the much larger world-occupancy payload even though neither the
+	// volume voxels nor its transform changed.
+	if (runtime_material.is_valid()) {
+		_ensure_fallback_textures();
+		const RID current_neighbor_texture = neighbor_face_texture.is_valid() ? neighbor_face_texture->get_rid() : RID();
+		if (current_neighbor_texture != previous_neighbor_texture) {
+			runtime_material->set_shader_parameter(
+					"u_neighbor_faces",
+					neighbor_face_texture.is_valid() ? neighbor_face_texture : fallback_neighbor_face_texture);
+		}
+		runtime_material->set_shader_parameter("u_neighbor_mask", neighbor_mask);
+	}
 }
 
 void VoxelVolume3D::_notification(int p_what) {

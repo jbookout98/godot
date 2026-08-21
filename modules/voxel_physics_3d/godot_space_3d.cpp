@@ -867,7 +867,13 @@ bool GodotSpace3D::test_body_motion(GodotBody3D *p_body, const PhysicsServer3D::
 				real_t low = 0.0;
 				real_t hi = 1.0;
 				real_t fraction_coeff = 0.5;
-				for (int k = 0; k < 8; k++) { //steps should be customizable..
+				// Voxel contacts run an exact static manifold solve at the unsafe
+				// transform below. Five cast refinements already bound a normal
+				// character step to a small fraction of one voxel; the generic eight
+				// passes only repeated the expensive sparse-voxel distance query while
+				// sliding along a wall.
+				const int cast_iterations = col_obj->get_shape(shape_idx)->get_type() == PhysicsServer3D::SHAPE_CUSTOM ? 5 : 8;
+				for (int k = 0; k < cast_iterations; k++) { //steps should be customizable..
 					real_t fraction = low + (hi - low) * fraction_coeff;
 
 					mshape.motion = body_shape_xform_inv.basis.xform(p_parameters.motion * fraction);

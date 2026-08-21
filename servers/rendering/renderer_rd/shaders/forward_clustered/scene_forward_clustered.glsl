@@ -1470,6 +1470,9 @@ void fragment_shader(in SceneData scene_data) {
 #ifdef LIGHTING_VERTEX_USED
 	vec3 lighting_vertex = vertex;
 #endif // LIGHTING_VERTEX_USED
+#ifdef VOXEL_FACE_LIGHTING_USED
+	bool voxel_face_lighting = false;
+#endif
 #ifdef VOXEL_OCCUPANCY_SHADOWS_USED
 	bool voxel_occupancy_shadows = false;
 #endif
@@ -1527,6 +1530,20 @@ vec3 view = view_highp;
 	view = -normalize(vertex);
 #endif //USE_MULTIVIEW
 #endif // LIGHT_VERTEX_USED
+
+	// Keep the exact LIGHT_VERTEX for depth-dependent effects and visibility,
+	// but let raymarched materials select a stable point for view-dependent and
+	// area-light calculations. Voxel Forward writes the center of the visible
+	// voxel face so those inputs stay constant across that face.
+	vec3 lighting_evaluation_vertex = vertex;
+#ifdef LIGHTING_VERTEX_USED
+	lighting_evaluation_vertex = lighting_vertex;
+#ifdef USE_MULTIVIEW
+	view = -normalize(lighting_evaluation_vertex - eye_offset);
+#else
+	view = -normalize(lighting_evaluation_vertex);
+#endif // USE_MULTIVIEW
+#endif // LIGHTING_VERTEX_USED
 
 #ifdef NORMAL_USED
 	vec3 geo_normal = normalize(normal);
@@ -2447,6 +2464,12 @@ vec3 view = view_highp;
 
 		// Do shadow and lighting in two passes to reduce register pressure.
 #ifndef SHADOWS_DISABLED
+		// Conventional shadow maps include dynamic mesh casters. Temporarily use
+		// the voxel face center as their receiver so the result is face-constant.
+#ifdef LIGHTING_VERTEX_USED
+		vec3 exact_shadow_receiver_vertex = vertex;
+		vertex = lighting_vertex;
+#endif
 		uint shadow0 = 0;
 		uint shadow1 = 0;
 
@@ -2717,6 +2740,10 @@ vec3 view = view_highp;
 			shadow0 |= uint(clamp(shadowmask * 255.0, 0.0, 255.0));
 		}
 #endif // USE_LIGHTMAP
+
+#ifdef LIGHTING_VERTEX_USED
+		vertex = exact_shadow_receiver_vertex;
+#endif
 
 #endif // SHADOWS_DISABLED
 
@@ -3039,7 +3066,7 @@ vec3 view = view_highp;
 					continue; // Statically baked light and object uses lightmap, skip
 				}
 
-				light_process_area(light_index, vertex, view, normal, vertex_ddx, vertex_ddy, f0, roughness, metallic, scene_data.taa_frame_count, albedo, alpha, screen_uv, energy_compensation,
+				light_process_area(light_index, vertex, lighting_evaluation_vertex, view, normal, vertex_ddx, vertex_ddy, f0, roughness, metallic, scene_data.taa_frame_count, albedo, alpha, screen_uv, energy_compensation,
 #ifdef LIGHT_BACKLIGHT_USED
 						backlight,
 #endif

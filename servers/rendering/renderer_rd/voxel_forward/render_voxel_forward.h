@@ -33,6 +33,8 @@
 #include "servers/rendering/renderer_rd/forward_clustered/render_forward_clustered.h"
 #include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_indirect_inject.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_indirect_propagate.glsl.gen.h"
+#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_reflection_color_inject.glsl.gen.h"
+#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_reflection_resolve.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_shadow_atlas.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_shadow_resolve.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_visibility.glsl.gen.h"
@@ -73,6 +75,12 @@ private:
 	VoxelIndirectPropagateShaderRD indirect_propagate_shader;
 	RID indirect_propagate_shader_version;
 	RID indirect_propagate_pipeline;
+	VoxelReflectionColorInjectShaderRD reflection_color_inject_shader;
+	RID reflection_color_inject_shader_version;
+	RID reflection_color_inject_pipeline;
+	VoxelReflectionResolveShaderRD reflection_resolve_shader;
+	RID reflection_resolve_shader_version;
+	RID reflection_resolve_pipeline;
 	RID shadow_mask_texture;
 	RID shadow_mask_source_rd;
 	RID shadow_atlas_source_rd;
@@ -96,6 +104,18 @@ private:
 	Vector3 indirect_light_direction;
 	Color indirect_light_color;
 	float indirect_light_energy = 0.0f;
+	bool indirect_dirty_updates_enabled = true;
+	static constexpr uint32_t REFLECTION_CASCADE_COUNT = 3;
+	RID reflection_color_grid_rd[REFLECTION_CASCADE_COUNT];
+	Vector3 reflection_color_grid_origin[REFLECTION_CASCADE_COUNT];
+	float reflection_color_grid_cell_size[REFLECTION_CASCADE_COUNT] = {};
+	bool reflection_color_grid_initialized[REFLECTION_CASCADE_COUNT] = {};
+	uint32_t reflection_color_grid_resolution = 0;
+	uint64_t reflection_color_world_revision = UINT64_MAX;
+	RID reflection_texture;
+	RID reflection_source_rd;
+	RID reflection_uniform_buffer;
+	Size2i reflection_screen_size;
 	RID occupancy_uniform_buffer;
 	RID bound_occupancy_directory;
 	RID bound_occupancy_bricks;
@@ -144,11 +164,33 @@ private:
 		float grid_origin_cell_size[4];
 		int32_t grid_directory[4];
 		float propagation[4];
+		int32_t dispatch_origin[4];
+	};
+
+	struct ReflectionColorInjectPushConstant {
+		float world_to_voxel[16];
+		float grid_origin_cell_size[4];
+		int32_t dispatch_origin[4];
+		int32_t volume_dimensions[4];
+		int32_t grid_resolution[4];
+	};
+
+	struct ReflectionUniformData {
+		float inv_view_projection[16];
+		float world_origin_voxel_size[4];
+		float camera_position_max_distance[4];
+		float color_grid_origin_cell_size[REFLECTION_CASCADE_COUNT][4];
+		float indirect_grid_origin_cell_size[INDIRECT_CASCADE_COUNT][4];
+		float ambient_color_energy[4];
+		int32_t screen_grid_steps[4];
+		int32_t state[4];
 	};
 
 	void _render_shadow_atlas(const RenderDataRD *p_render_data);
 	void _render_indirect_light(const RenderDataRD *p_render_data, RID p_shadow_atlas, RID p_sampler, const Vector3 &p_light_direction, const Color &p_light_color, float p_light_energy);
 	void _free_indirect_light();
+	void _render_voxel_reflections(const RenderDataRD *p_render_data);
+	void _free_voxel_reflections();
 
 protected:
 	virtual void _add_voxel_occupancy_uniforms(Vector<RD::Uniform> &r_uniforms) override;

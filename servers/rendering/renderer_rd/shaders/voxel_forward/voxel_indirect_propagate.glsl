@@ -24,6 +24,7 @@ layout(push_constant, std430) uniform Params {
 	vec4 grid_origin_cell_size;
 	ivec4 grid_directory;
 	vec4 propagation;
+	ivec4 dispatch_origin;
 }
 params;
 
@@ -74,7 +75,7 @@ bool connection_blocked(vec3 from, vec3 to) {
 }
 
 void main() {
-	ivec3 cell = ivec3(gl_GlobalInvocationID.xyz);
+	ivec3 cell = params.dispatch_origin.xyz + ivec3(gl_GlobalInvocationID.xyz);
 	int resolution = params.grid_directory.x;
 	if (any(greaterThanEqual(cell, ivec3(resolution)))) {
 		return;

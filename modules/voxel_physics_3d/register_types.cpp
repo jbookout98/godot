@@ -117,6 +117,9 @@ void initialize_voxel_physics_3d_module(ModuleInitializationLevel p_level) {
 		GLOBAL_DEF("rendering/voxel_forward/indirect_light/propagation_decay", 0.78);
 		GLOBAL_DEF("rendering/voxel_forward/indirect_light/shadow_bias_voxels", 1.0);
 		GLOBAL_DEF("rendering/voxel_forward/indirect_light/intensity", 1.0);
+		GLOBAL_DEF("rendering/voxel_forward/indirect_light/dirty_updates_enabled", true);
+		GLOBAL_DEF("rendering/voxel_forward/ambient_light/color", Color(0.22, 0.22, 0.22));
+		GLOBAL_DEF("rendering/voxel_forward/ambient_light/energy", 1.0);
 		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::INT, "rendering/voxel_forward/indirect_light/resolution", PROPERTY_HINT_RANGE, "24,96,8"));
 		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_forward/indirect_light/near_cell_size", PROPERTY_HINT_RANGE, "0.05,4,0.05,or_greater,suffix:m"));
 		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_forward/indirect_light/far_cell_size", PROPERTY_HINT_RANGE, "0.1,16,0.1,or_greater,suffix:m"));
@@ -128,6 +131,30 @@ void initialize_voxel_physics_3d_module(ModuleInitializationLevel p_level) {
 		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_forward/indirect_light/propagation_decay", PROPERTY_HINT_RANGE, "0,0.99,0.01"));
 		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_forward/indirect_light/shadow_bias_voxels", PROPERTY_HINT_RANGE, "0,8,0.05"));
 		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_forward/indirect_light/intensity", PROPERTY_HINT_RANGE, "0,8,0.05,or_greater"));
+		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::COLOR, "rendering/voxel_forward/ambient_light/color", PROPERTY_HINT_COLOR_NO_ALPHA));
+		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_forward/ambient_light/energy", PROPERTY_HINT_RANGE, "0,8,0.05,or_greater"));
+		// Mirror rays are traced through the same sparse world occupancy used by
+		// voxel shadows. A live GPU color clipmap supplies hit albedo without
+		// duplicating destructible voxel ownership on the CPU.
+		GLOBAL_DEF("rendering/voxel_forward/reflections/enabled", true);
+		GLOBAL_DEF("rendering/voxel_forward/reflections/resolution_scale", 0.5);
+		GLOBAL_DEF("rendering/voxel_forward/reflections/grid_resolution", 64);
+		GLOBAL_DEF("rendering/voxel_forward/reflections/near_cell_size", 0.1);
+		GLOBAL_DEF("rendering/voxel_forward/reflections/far_cell_size", 0.4);
+		GLOBAL_DEF("rendering/voxel_forward/reflections/distant_cell_size", 1.6);
+		GLOBAL_DEF("rendering/voxel_forward/reflections/recenter_cells", 8);
+		GLOBAL_DEF("rendering/voxel_forward/reflections/max_distance", 96.0);
+		GLOBAL_DEF("rendering/voxel_forward/reflections/max_steps", 512);
+		GLOBAL_DEF("rendering/voxel_forward/reflections/intensity", 1.0);
+		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_forward/reflections/resolution_scale", PROPERTY_HINT_RANGE, "0.25,1,0.05"));
+		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::INT, "rendering/voxel_forward/reflections/grid_resolution", PROPERTY_HINT_RANGE, "32,128,16"));
+		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_forward/reflections/near_cell_size", PROPERTY_HINT_RANGE, "0.05,2,0.05,or_greater,suffix:m"));
+		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_forward/reflections/far_cell_size", PROPERTY_HINT_RANGE, "0.1,8,0.1,or_greater,suffix:m"));
+		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_forward/reflections/distant_cell_size", PROPERTY_HINT_RANGE, "0.5,32,0.5,or_greater,suffix:m"));
+		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::INT, "rendering/voxel_forward/reflections/recenter_cells", PROPERTY_HINT_RANGE, "1,32,1"));
+		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_forward/reflections/max_distance", PROPERTY_HINT_RANGE, "1,512,1,or_greater,suffix:m"));
+		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::INT, "rendering/voxel_forward/reflections/max_steps", PROPERTY_HINT_RANGE, "16,4096,16"));
+		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_forward/reflections/intensity", PROPERTY_HINT_RANGE, "0,8,0.05,or_greater"));
 		// Legacy exact-face proxy generation scales poorly with large resident
 		// volume sets. Keep it as an opt-in Forward+ fallback while Voxel Forward
 		// owns voxel visibility and shadows directly.

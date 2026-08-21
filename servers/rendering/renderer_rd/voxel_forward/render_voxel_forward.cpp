@@ -73,6 +73,13 @@ RenderVoxelForward::RenderVoxelForward() {
 	indirect_propagate_shader.initialize(shadow_modes);
 	indirect_propagate_shader_version = indirect_propagate_shader.version_create();
 	indirect_propagate_pipeline = RD::get_singleton()->compute_pipeline_create(indirect_propagate_shader.version_get_shader(indirect_propagate_shader_version, 0));
+	reflection_color_inject_shader.initialize(shadow_modes);
+	reflection_color_inject_shader_version = reflection_color_inject_shader.version_create();
+	reflection_color_inject_pipeline = RD::get_singleton()->compute_pipeline_create(reflection_color_inject_shader.version_get_shader(reflection_color_inject_shader_version, 0));
+	reflection_resolve_shader.initialize(shadow_modes);
+	reflection_resolve_shader_version = reflection_resolve_shader.version_create();
+	reflection_resolve_pipeline = RD::get_singleton()->compute_pipeline_create(reflection_resolve_shader.version_get_shader(reflection_resolve_shader_version, 0));
+	reflection_uniform_buffer = RD::get_singleton()->uniform_buffer_create(sizeof(ReflectionUniformData));
 }
 
 RenderVoxelForward::~RenderVoxelForward() {
@@ -84,7 +91,13 @@ RenderVoxelForward::~RenderVoxelForward() {
 		RendererRD::MaterialStorage::get_singleton()->global_shader_parameter_set_override(SNAME("voxel_forward_indirect_far"), Variant());
 		RendererRD::MaterialStorage::get_singleton()->global_shader_parameter_set_override(SNAME("voxel_forward_indirect_distant"), Variant());
 		RendererRD::MaterialStorage::get_singleton()->global_shader_parameter_set_override(SNAME("voxel_forward_indirect_ready"), Variant());
+		RendererRD::MaterialStorage::get_singleton()->global_shader_parameter_set_override(SNAME("voxel_forward_ambient_color"), Variant());
+		RendererRD::MaterialStorage::get_singleton()->global_shader_parameter_set_override(SNAME("voxel_forward_ambient_energy"), Variant());
+		RendererRD::MaterialStorage::get_singleton()->global_shader_parameter_set_override(SNAME("voxel_forward_reflection"), Variant());
+		RendererRD::MaterialStorage::get_singleton()->global_shader_parameter_set_override(SNAME("voxel_forward_reflection_ready"), Variant());
+		RendererRD::MaterialStorage::get_singleton()->global_shader_parameter_set_override(SNAME("voxel_forward_reflection_intensity"), Variant());
 	}
+	_free_voxel_reflections();
 	_free_indirect_light();
 	if (shadow_mask_texture.is_valid() && RendererRD::TextureStorage::get_singleton() != nullptr) {
 		RendererRD::TextureStorage::get_singleton()->texture_free(shadow_mask_texture);
@@ -101,6 +114,12 @@ RenderVoxelForward::~RenderVoxelForward() {
 	if (indirect_propagate_pipeline.is_valid()) {
 		RD::get_singleton()->free_rid(indirect_propagate_pipeline);
 	}
+	if (reflection_color_inject_pipeline.is_valid()) {
+		RD::get_singleton()->free_rid(reflection_color_inject_pipeline);
+	}
+	if (reflection_resolve_pipeline.is_valid()) {
+		RD::get_singleton()->free_rid(reflection_resolve_pipeline);
+	}
 	if (occupancy_uniform_buffer.is_valid()) {
 		RD::get_singleton()->free_rid(occupancy_uniform_buffer);
 	}
@@ -108,10 +127,35 @@ RenderVoxelForward::~RenderVoxelForward() {
 	shadow_resolve_shader.version_free(shadow_resolve_shader_version);
 	indirect_inject_shader.version_free(indirect_inject_shader_version);
 	indirect_propagate_shader.version_free(indirect_propagate_shader_version);
+	reflection_color_inject_shader.version_free(reflection_color_inject_shader_version);
+	reflection_resolve_shader.version_free(reflection_resolve_shader_version);
 	for (uint32_t i = 0; i < 3; i++) {
 		visibility_pipelines[i].clear();
 	}
 	visibility_shader.version_free(visibility_shader_version);
+}
+
+void RenderVoxelForward::_free_voxel_reflections() {
+	RendererRD::TextureStorage *texture_storage = RendererRD::TextureStorage::get_singleton();
+	if (reflection_texture.is_valid() && texture_storage != nullptr) {
+		texture_storage->texture_free(reflection_texture);
+		reflection_texture = RID();
+	}
+	reflection_source_rd = RID();
+	reflection_screen_size = Size2i();
+	for (uint32_t cascade = 0; cascade < REFLECTION_CASCADE_COUNT; cascade++) {
+		if (reflection_color_grid_rd[cascade].is_valid()) {
+			RD::get_singleton()->free_rid(reflection_color_grid_rd[cascade]);
+			reflection_color_grid_rd[cascade] = RID();
+		}
+		reflection_color_grid_initialized[cascade] = false;
+	}
+	reflection_color_grid_resolution = 0;
+	reflection_color_world_revision = UINT64_MAX;
+	if (reflection_uniform_buffer.is_valid()) {
+		RD::get_singleton()->free_rid(reflection_uniform_buffer);
+		reflection_uniform_buffer = RID();
+	}
 }
 
 void RenderVoxelForward::_free_indirect_light() {
@@ -154,6 +198,9 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 	const VoxelForwardVolumeStorage::WorldOccupancy &world = volume_storage.get_world_occupancy();
 	if (!world.directory_buffer.is_valid() || !world.brick_buffer.is_valid() || world.occupied_brick_count == 0 || world.voxel_size <= 0.0f) {
 		material_storage->global_shader_parameter_set_override(SNAME("voxel_forward_indirect_ready"), false);
+		// If the world becomes empty, the retained textures no longer describe
+		// a valid history for a later incremental insertion.
+		indirect_world_revision = UINT64_MAX;
 		return;
 	}
 
@@ -198,7 +245,7 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 		texture_format.height = resolution;
 		texture_format.depth = resolution;
 		texture_format.texture_type = RD::TEXTURE_TYPE_3D;
-		texture_format.usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_STORAGE_BIT | RD::TEXTURE_USAGE_CAN_COPY_TO_BIT;
+		texture_format.usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_STORAGE_BIT | RD::TEXTURE_USAGE_CAN_COPY_TO_BIT | RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT;
 		RendererRD::TextureStorage *texture_storage = RendererRD::TextureStorage::get_singleton();
 		for (uint32_t cascade = 0; cascade < INDIRECT_CASCADE_COUNT; cascade++) {
 			RID replacement_rd[2];
@@ -234,15 +281,21 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 		material_storage->global_shader_parameter_set_override(SNAME("voxel_forward_indirect_distant"), indirect_grid_texture[2]);
 	}
 
-	const bool common_invalid = indirect_world_revision != world.revision ||
-			!indirect_light_direction.is_equal_approx(p_light_direction) ||
+	const bool world_invalid = indirect_world_revision != world.revision;
+	const bool light_invalid = !indirect_light_direction.is_equal_approx(p_light_direction) ||
 			!indirect_light_color.is_equal_approx(p_light_color) ||
 			!Math::is_equal_approx(indirect_light_energy, p_light_energy);
+	const bool dirty_updates_enabled = bool(GLOBAL_GET("rendering/voxel_forward/indirect_light/dirty_updates_enabled"));
+	const bool update_mode_changed = indirect_dirty_updates_enabled != dirty_updates_enabled;
+	const bool common_invalid = world_invalid || light_invalid || update_mode_changed;
 	bool any_invalid = common_invalid;
+	bool grid_layout_invalid = false;
 	for (uint32_t cascade = 0; cascade < INDIRECT_CASCADE_COUNT; cascade++) {
-		any_invalid = any_invalid || !indirect_cascade_initialized[cascade] ||
+		const bool cascade_layout_invalid = !indirect_cascade_initialized[cascade] ||
 				!indirect_grid_origin[cascade].is_equal_approx(grid_origins[cascade]) ||
 				!Math::is_equal_approx(indirect_grid_cell_size[cascade], cell_sizes[cascade]);
+		grid_layout_invalid = grid_layout_invalid || cascade_layout_invalid;
+		any_invalid = any_invalid || cascade_layout_invalid;
 	}
 	if (any_invalid) {
 		const RID inject_shader_rid = indirect_inject_shader.version_get_shader(indirect_inject_shader_version, 0);
@@ -250,6 +303,10 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 		const int base_propagation_steps = CLAMP(int(GLOBAL_GET("rendering/voxel_forward/indirect_light/propagation_steps")), 2, 16) & ~1;
 		const float propagation_decay = CLAMP(float(GLOBAL_GET("rendering/voxel_forward/indirect_light/propagation_decay")), 0.0f, 0.99f);
 		const float shadow_bias = MAX(0.0f, float(GLOBAL_GET("rendering/voxel_forward/indirect_light/shadow_bias_voxels"))) * world.voxel_size;
+		const bool can_use_dirty_updates = dirty_updates_enabled && world_invalid && !light_invalid && !update_mode_changed && !grid_layout_invalid &&
+				world.last_incremental_revision == world.revision && !world.last_dirty_bricks.is_empty();
+		uint32_t partial_cascade_count = 0;
+		uint64_t dispatched_cell_count = 0;
 
 		RENDER_TIMESTAMP("Voxel Indirect Light");
 		RD::get_singleton()->draw_command_begin_label("Voxel Indirect Light");
@@ -262,6 +319,53 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 			}
 			const int sample_radius = CLAMP(int(Math::ceil(cell_sizes[cascade] / world.voxel_size)), 1, 8);
 			const int propagation_steps = MAX(2, (base_propagation_steps >> cascade)) & ~1;
+			Vector3i dispatch_origin;
+			Vector3i dispatch_size(resolution, resolution, resolution);
+			bool partial_update = false;
+			if (can_use_dirty_updates) {
+				const int padding_cells = propagation_steps + 1;
+				Vector3i dirty_begin(INT32_MAX, INT32_MAX, INT32_MAX);
+				Vector3i dirty_end(INT32_MIN, INT32_MIN, INT32_MIN);
+				for (const Vector3i &dirty_brick : world.last_dirty_bricks) {
+					const Vector3 brick_world_begin = world.origin + Vector3(dirty_brick * 8) * world.voxel_size;
+					const Vector3 brick_world_end = brick_world_begin + Vector3(8, 8, 8) * world.voxel_size;
+					for (int axis = 0; axis < 3; axis++) {
+						const int cell_begin = int(Math::floor((brick_world_begin[axis] - grid_origins[cascade][axis]) / cell_sizes[cascade])) - padding_cells;
+						const int cell_end = int(Math::ceil((brick_world_end[axis] - grid_origins[cascade][axis]) / cell_sizes[cascade])) + padding_cells;
+						dirty_begin[axis] = MIN(dirty_begin[axis], cell_begin);
+						dirty_end[axis] = MAX(dirty_end[axis], cell_end);
+					}
+				}
+				const bool intersects_cascade = dirty_end.x > 0 && dirty_end.y > 0 && dirty_end.z > 0 &&
+						dirty_begin.x < int(resolution) && dirty_begin.y < int(resolution) && dirty_begin.z < int(resolution);
+				if (!intersects_cascade) {
+					continue;
+				}
+				for (int axis = 0; axis < 3; axis++) {
+					dirty_begin[axis] = CLAMP(dirty_begin[axis], 0, int(resolution));
+					dirty_end[axis] = CLAMP(dirty_end[axis], 0, int(resolution));
+				}
+				const Vector3i dirty_size = dirty_end - dirty_begin;
+				const uint64_t dirty_cell_count = uint64_t(dirty_size.x) * uint64_t(dirty_size.y) * uint64_t(dirty_size.z);
+				const uint64_t full_cell_count = uint64_t(resolution) * uint64_t(resolution) * uint64_t(resolution);
+				// Once the conservative dirty box reaches most of the cascade, a
+				// full dispatch avoids paying for a copy without useful savings.
+				if (dirty_cell_count * 4 < full_cell_count * 3) {
+					dispatch_origin = dirty_begin;
+					dispatch_size = dirty_size;
+					partial_update = true;
+				}
+			}
+			if (partial_update) {
+				const Error copy_error = RD::get_singleton()->texture_copy(indirect_grid_rd[cascade][0], indirect_grid_rd[cascade][1], Vector3(), Vector3(), Vector3(resolution, resolution, resolution), 0, 0, 0, 0);
+				if (copy_error != OK) {
+					dispatch_origin = Vector3i();
+					dispatch_size = Vector3i(resolution, resolution, resolution);
+					partial_update = false;
+				}
+			}
+			partial_cascade_count += partial_update ? 1 : 0;
+			dispatched_cell_count += uint64_t(dispatch_size.x) * uint64_t(dispatch_size.y) * uint64_t(dispatch_size.z);
 			RD::Uniform u_output(RD::UNIFORM_TYPE_IMAGE, 0, Vector<RID>({ indirect_grid_rd[cascade][0] }));
 			RD::Uniform u_atlas(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 1, Vector<RID>({ p_sampler, p_shadow_atlas }));
 			RD::Uniform u_directory(RD::UNIFORM_TYPE_STORAGE_BUFFER, 2, Vector<RID>({ world.directory_buffer }));
@@ -300,13 +404,13 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 			inject_push.grid_directory[0] = resolution;
 			inject_push.grid_directory[1] = world.directory_mask;
 			inject_push.grid_directory[2] = sample_radius;
-			inject_push.grid_directory[3] = cascade;
+			inject_push.grid_directory[3] = dispatch_origin.x | (dispatch_origin.y << 8) | (dispatch_origin.z << 16);
 
 			RD::ComputeListID inject_list = RD::get_singleton()->compute_list_begin();
 			RD::get_singleton()->compute_list_bind_compute_pipeline(inject_list, indirect_inject_pipeline);
 			RD::get_singleton()->compute_list_bind_uniform_set(inject_list, inject_uniform_set, 0);
 			RD::get_singleton()->compute_list_set_push_constant(inject_list, &inject_push, sizeof(IndirectInjectPushConstant));
-			RD::get_singleton()->compute_list_dispatch_threads(inject_list, resolution, resolution, resolution);
+			RD::get_singleton()->compute_list_dispatch_threads(inject_list, dispatch_size.x, dispatch_size.y, dispatch_size.z);
 			RD::get_singleton()->compute_list_end();
 
 			IndirectPropagatePushConstant propagate_push = {};
@@ -321,6 +425,9 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 			propagate_push.grid_directory[0] = resolution;
 			propagate_push.grid_directory[1] = world.directory_mask;
 			propagate_push.propagation[0] = propagation_decay;
+			propagate_push.dispatch_origin[0] = dispatch_origin.x;
+			propagate_push.dispatch_origin[1] = dispatch_origin.y;
+			propagate_push.dispatch_origin[2] = dispatch_origin.z;
 			for (int step = 0; step < propagation_steps; step++) {
 				const uint32_t source = uint32_t(step) & 1u;
 				const uint32_t destination = source ^ 1u;
@@ -333,7 +440,7 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 				RD::get_singleton()->compute_list_bind_compute_pipeline(propagate_list, indirect_propagate_pipeline);
 				RD::get_singleton()->compute_list_bind_uniform_set(propagate_list, propagate_uniform_set, 0);
 				RD::get_singleton()->compute_list_set_push_constant(propagate_list, &propagate_push, sizeof(IndirectPropagatePushConstant));
-				RD::get_singleton()->compute_list_dispatch_threads(propagate_list, resolution, resolution, resolution);
+				RD::get_singleton()->compute_list_dispatch_threads(propagate_list, dispatch_size.x, dispatch_size.y, dispatch_size.z);
 				RD::get_singleton()->compute_list_end();
 			}
 			indirect_grid_origin[cascade] = grid_origins[cascade];
@@ -346,7 +453,8 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 		indirect_light_direction = p_light_direction;
 		indirect_light_color = p_light_color;
 		indirect_light_energy = p_light_energy;
-		print_verbose(vformat("Voxel Forward indirect cascades updated: %d^3 x 3, %.2f / %.2f / %.2f m cells, revision %d.", resolution, near_cell_size, far_cell_size, distant_cell_size, world.revision));
+		indirect_dirty_updates_enabled = dirty_updates_enabled;
+		print_verbose(vformat("Voxel Forward indirect cascades updated: %d partial, %d dispatched cells, %d^3 grid, %.2f / %.2f / %.2f m cells, revision %d.", partial_cascade_count, dispatched_cell_count, resolution, near_cell_size, far_cell_size, distant_cell_size, world.revision));
 	}
 
 	material_storage->global_shader_parameter_set_override(SNAME("voxel_forward_indirect_near_origin"), indirect_grid_origin[0]);
@@ -360,6 +468,249 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 	material_storage->global_shader_parameter_set_override(SNAME("voxel_forward_indirect_transition_cells"), transition_cells);
 	material_storage->global_shader_parameter_set_override(SNAME("voxel_forward_indirect_intensity"), MAX(0.0f, float(GLOBAL_GET("rendering/voxel_forward/indirect_light/intensity"))));
 	material_storage->global_shader_parameter_set_override(SNAME("voxel_forward_indirect_ready"), indirect_cascade_initialized[0] && indirect_cascade_initialized[1] && indirect_cascade_initialized[2]);
+}
+
+void RenderVoxelForward::_render_voxel_reflections(const RenderDataRD *p_render_data) {
+	RendererRD::MaterialStorage *material_storage = RendererRD::MaterialStorage::get_singleton();
+	auto disable_reflections = [material_storage]() {
+		material_storage->global_shader_parameter_set_override(SNAME("voxel_forward_reflection_ready"), false);
+	};
+	const bool enabled = bool(GLOBAL_GET("rendering/voxel_forward/reflections/enabled"));
+	if (!enabled || p_render_data == nullptr || p_render_data->render_buffers.is_null() || p_render_data->scene_data == nullptr || p_render_data->scene_data->view_count != 1 || !reflection_color_inject_pipeline.is_valid() || !reflection_resolve_pipeline.is_valid() || !reflection_uniform_buffer.is_valid()) {
+		disable_reflections();
+		return;
+	}
+	const VoxelForwardVolumeStorage::WorldOccupancy &world = volume_storage.get_world_occupancy();
+	if (!world.directory_buffer.is_valid() || !world.brick_buffer.is_valid() || world.occupied_brick_count == 0 || world.voxel_size <= 0.0f) {
+		disable_reflections();
+		return;
+	}
+
+	const uint32_t resolution = uint32_t(CLAMP(int(GLOBAL_GET("rendering/voxel_forward/reflections/grid_resolution")), 32, 128));
+	const float near_cell_size = MAX(world.voxel_size, float(GLOBAL_GET("rendering/voxel_forward/reflections/near_cell_size")));
+	const float far_cell_size = MAX(near_cell_size, float(GLOBAL_GET("rendering/voxel_forward/reflections/far_cell_size")));
+	const float distant_cell_size = MAX(far_cell_size, float(GLOBAL_GET("rendering/voxel_forward/reflections/distant_cell_size")));
+	const float cell_sizes[REFLECTION_CASCADE_COUNT] = { near_cell_size, far_cell_size, distant_cell_size };
+	const int recenter_cells = CLAMP(int(GLOBAL_GET("rendering/voxel_forward/reflections/recenter_cells")), 1, 32);
+	const Vector3 camera_position = p_render_data->scene_data->cam_transform.origin;
+	Vector3 grid_origins[REFLECTION_CASCADE_COUNT];
+	for (uint32_t cascade = 0; cascade < REFLECTION_CASCADE_COUNT; cascade++) {
+		const float snap = cell_sizes[cascade] * float(recenter_cells);
+		const float half_extent = cell_sizes[cascade] * float(resolution) * 0.5f;
+		Vector3 snapped_center;
+		for (int axis = 0; axis < 3; axis++) {
+			snapped_center[axis] = world.origin[axis] + Math::floor((camera_position[axis] - world.origin[axis]) / snap + 0.5f) * snap;
+		}
+		grid_origins[cascade] = snapped_center - Vector3(half_extent, half_extent, half_extent);
+	}
+
+	if (reflection_color_grid_resolution != resolution) {
+		RD::TextureFormat format;
+		format.format = RD::DATA_FORMAT_R8G8B8A8_UNORM;
+		format.width = resolution;
+		format.height = resolution;
+		format.depth = resolution;
+		format.texture_type = RD::TEXTURE_TYPE_3D;
+		format.usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_STORAGE_BIT | RD::TEXTURE_USAGE_CAN_COPY_TO_BIT;
+		for (uint32_t cascade = 0; cascade < REFLECTION_CASCADE_COUNT; cascade++) {
+			if (reflection_color_grid_rd[cascade].is_valid()) {
+				RD::get_singleton()->free_rid(reflection_color_grid_rd[cascade]);
+			}
+			reflection_color_grid_rd[cascade] = RD::get_singleton()->texture_create(format, RD::TextureView());
+			RD::get_singleton()->set_resource_name(reflection_color_grid_rd[cascade], vformat("Voxel Reflection Color Cascade %d", cascade));
+			reflection_color_grid_initialized[cascade] = false;
+		}
+		reflection_color_grid_resolution = resolution;
+	}
+
+	bool cascade_invalid[REFLECTION_CASCADE_COUNT] = {};
+	bool any_invalid = reflection_color_world_revision != world.revision;
+	for (uint32_t cascade = 0; cascade < REFLECTION_CASCADE_COUNT; cascade++) {
+		cascade_invalid[cascade] = reflection_color_world_revision != world.revision || !reflection_color_grid_initialized[cascade] ||
+				!reflection_color_grid_origin[cascade].is_equal_approx(grid_origins[cascade]) ||
+				!Math::is_equal_approx(reflection_color_grid_cell_size[cascade], cell_sizes[cascade]);
+		any_invalid = any_invalid || cascade_invalid[cascade];
+	}
+
+	RendererRD::TextureStorage *texture_storage = RendererRD::TextureStorage::get_singleton();
+	const RID sampler = material_storage->sampler_rd_get_default(RSE::CANVAS_ITEM_TEXTURE_FILTER_NEAREST, RSE::CANVAS_ITEM_TEXTURE_REPEAT_DISABLED);
+	if (any_invalid) {
+		const RID inject_shader_rid = reflection_color_inject_shader.version_get_shader(reflection_color_inject_shader_version, 0);
+		RENDER_TIMESTAMP("Voxel Reflection Color Clipmaps");
+		RD::get_singleton()->draw_command_begin_label("Voxel Reflection Color Clipmaps");
+		for (uint32_t cascade = 0; cascade < REFLECTION_CASCADE_COUNT; cascade++) {
+			if (!cascade_invalid[cascade]) {
+				continue;
+			}
+			RD::get_singleton()->texture_clear(reflection_color_grid_rd[cascade], Color(0, 0, 0, 0), 0, 1, 0, 1);
+			const AABB grid_bounds(grid_origins[cascade], Vector3(1, 1, 1) * (cell_sizes[cascade] * float(resolution)));
+			for (const KeyValue<RID, VoxelForwardVolumeStorage::Volume> &entry : volume_storage.get_volumes()) {
+				const VoxelForwardVolumeStorage::Volume &volume = entry.value;
+				RID voxel_texture = texture_storage->texture_get_rd_texture(volume.voxel_texture);
+				RID brick_texture = texture_storage->texture_get_rd_texture(volume.brick_texture);
+				RID palette_texture = texture_storage->texture_get_rd_texture(volume.palette_texture, true);
+				if (!voxel_texture.is_valid() || !brick_texture.is_valid() || !palette_texture.is_valid()) {
+					continue;
+				}
+				const AABB volume_bounds = volume.transform.xform(AABB(Vector3(), Vector3(volume.dimensions) * volume.voxel_size));
+				const AABB intersection = volume_bounds.intersection(grid_bounds);
+				if (!intersection.has_volume()) {
+					continue;
+				}
+				Vector3i dispatch_min;
+				Vector3i dispatch_max;
+				for (int axis = 0; axis < 3; axis++) {
+					dispatch_min[axis] = CLAMP(int(Math::floor((intersection.position[axis] - grid_origins[cascade][axis]) / cell_sizes[cascade])), 0, int(resolution));
+					dispatch_max[axis] = CLAMP(int(Math::ceil((intersection.get_end()[axis] - grid_origins[cascade][axis]) / cell_sizes[cascade])), 0, int(resolution));
+				}
+				const Vector3i dispatch_size = dispatch_max - dispatch_min;
+				if (dispatch_size.x <= 0 || dispatch_size.y <= 0 || dispatch_size.z <= 0) {
+					continue;
+				}
+
+				RD::Uniform u_output(RD::UNIFORM_TYPE_IMAGE, 0, Vector<RID>({ reflection_color_grid_rd[cascade] }));
+				RD::Uniform u_voxels(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 1, Vector<RID>({ sampler, voxel_texture }));
+				RD::Uniform u_bricks(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 2, Vector<RID>({ sampler, brick_texture }));
+				RD::Uniform u_palette(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 3, Vector<RID>({ sampler, palette_texture }));
+				const RID uniform_set = UniformSetCacheRD::get_singleton()->get_cache(inject_shader_rid, 0, u_output, u_voxels, u_bricks, u_palette);
+
+				ReflectionColorInjectPushConstant push = {};
+				const Transform3D voxel_to_world = volume.transform.scaled_local(Vector3(volume.voxel_size, volume.voxel_size, volume.voxel_size));
+				RendererRD::MaterialStorage::store_transform(voxel_to_world.affine_inverse(), push.world_to_voxel);
+				push.grid_origin_cell_size[0] = grid_origins[cascade].x;
+				push.grid_origin_cell_size[1] = grid_origins[cascade].y;
+				push.grid_origin_cell_size[2] = grid_origins[cascade].z;
+				push.grid_origin_cell_size[3] = cell_sizes[cascade];
+				push.dispatch_origin[0] = dispatch_min.x;
+				push.dispatch_origin[1] = dispatch_min.y;
+				push.dispatch_origin[2] = dispatch_min.z;
+				push.volume_dimensions[0] = volume.dimensions.x;
+				push.volume_dimensions[1] = volume.dimensions.y;
+				push.volume_dimensions[2] = volume.dimensions.z;
+				push.grid_resolution[0] = resolution;
+				push.grid_resolution[1] = resolution;
+				push.grid_resolution[2] = resolution;
+
+				RD::ComputeListID inject_list = RD::get_singleton()->compute_list_begin();
+				RD::get_singleton()->compute_list_bind_compute_pipeline(inject_list, reflection_color_inject_pipeline);
+				RD::get_singleton()->compute_list_bind_uniform_set(inject_list, uniform_set, 0);
+				RD::get_singleton()->compute_list_set_push_constant(inject_list, &push, sizeof(ReflectionColorInjectPushConstant));
+				RD::get_singleton()->compute_list_dispatch_threads(inject_list, dispatch_size.x, dispatch_size.y, dispatch_size.z);
+				RD::get_singleton()->compute_list_end();
+			}
+			reflection_color_grid_origin[cascade] = grid_origins[cascade];
+			reflection_color_grid_cell_size[cascade] = cell_sizes[cascade];
+			reflection_color_grid_initialized[cascade] = true;
+		}
+		RD::get_singleton()->draw_command_end_label();
+		reflection_color_world_revision = world.revision;
+		print_verbose(vformat("Voxel Forward reflection color clipmaps updated: %d^3 x 3, %.2f / %.2f / %.2f m cells, revision %d.", resolution, near_cell_size, far_cell_size, distant_cell_size, world.revision));
+	}
+
+	Ref<RenderSceneBuffersRD> render_buffers = p_render_data->render_buffers;
+	const Size2i internal_size = render_buffers->get_internal_size();
+	const float resolution_scale = CLAMP(float(GLOBAL_GET("rendering/voxel_forward/reflections/resolution_scale")), 0.25f, 1.0f);
+	const Size2i screen_size(MAX(1, int(Math::ceil(internal_size.x * resolution_scale))), MAX(1, int(Math::ceil(internal_size.y * resolution_scale))));
+	const StringName scope = SNAME("voxel_forward_reflection");
+	const StringName texture_name = SNAME("reflection_radiance");
+	if (render_buffers->has_texture(scope, texture_name) && reflection_screen_size != screen_size) {
+		material_storage->global_shader_parameter_set_override(SNAME("voxel_forward_reflection"), Variant());
+		if (reflection_texture.is_valid()) {
+			texture_storage->texture_free(reflection_texture);
+			reflection_texture = RID();
+		}
+		render_buffers->clear_context(scope);
+		reflection_source_rd = RID();
+	}
+	if (!render_buffers->has_texture(scope, texture_name)) {
+		render_buffers->create_texture(scope, texture_name, RD::DATA_FORMAT_R16G16B16A16_SFLOAT, RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_STORAGE_BIT, RD::TEXTURE_SAMPLES_1, screen_size);
+	}
+	const RID output = render_buffers->get_texture(scope, texture_name);
+	const RID depth = render_buffers->get_depth_texture();
+	if (!output.is_valid() || !depth.is_valid()) {
+		disable_reflections();
+		return;
+	}
+	if (reflection_source_rd != output) {
+		material_storage->global_shader_parameter_set_override(SNAME("voxel_forward_reflection"), Variant());
+		if (reflection_texture.is_valid()) {
+			texture_storage->texture_free(reflection_texture);
+		}
+		reflection_texture = texture_storage->texture_allocate();
+		texture_storage->texture_rd_initialize(reflection_texture, output);
+		reflection_source_rd = output;
+		material_storage->global_shader_parameter_set_override(SNAME("voxel_forward_reflection"), reflection_texture);
+	}
+	reflection_screen_size = screen_size;
+
+	ReflectionUniformData reflection_data = {};
+	const Projection view_projection = p_render_data->scene_data->get_view_projection(0) * Projection(p_render_data->scene_data->cam_transform.affine_inverse());
+	RendererRD::MaterialStorage::store_camera(view_projection.inverse(), reflection_data.inv_view_projection);
+	reflection_data.world_origin_voxel_size[0] = world.origin.x;
+	reflection_data.world_origin_voxel_size[1] = world.origin.y;
+	reflection_data.world_origin_voxel_size[2] = world.origin.z;
+	reflection_data.world_origin_voxel_size[3] = world.voxel_size;
+	reflection_data.camera_position_max_distance[0] = camera_position.x;
+	reflection_data.camera_position_max_distance[1] = camera_position.y;
+	reflection_data.camera_position_max_distance[2] = camera_position.z;
+	reflection_data.camera_position_max_distance[3] = MAX(world.voxel_size, float(GLOBAL_GET("rendering/voxel_forward/reflections/max_distance")));
+	for (uint32_t cascade = 0; cascade < REFLECTION_CASCADE_COUNT; cascade++) {
+		reflection_data.color_grid_origin_cell_size[cascade][0] = reflection_color_grid_origin[cascade].x;
+		reflection_data.color_grid_origin_cell_size[cascade][1] = reflection_color_grid_origin[cascade].y;
+		reflection_data.color_grid_origin_cell_size[cascade][2] = reflection_color_grid_origin[cascade].z;
+		reflection_data.color_grid_origin_cell_size[cascade][3] = reflection_color_grid_cell_size[cascade];
+		reflection_data.indirect_grid_origin_cell_size[cascade][0] = indirect_grid_origin[cascade].x;
+		reflection_data.indirect_grid_origin_cell_size[cascade][1] = indirect_grid_origin[cascade].y;
+		reflection_data.indirect_grid_origin_cell_size[cascade][2] = indirect_grid_origin[cascade].z;
+		reflection_data.indirect_grid_origin_cell_size[cascade][3] = indirect_grid_cell_size[cascade];
+	}
+	Color ambient_color = GLOBAL_GET("rendering/voxel_forward/ambient_light/color");
+	float ambient_energy = MAX(0.0f, float(GLOBAL_GET("rendering/voxel_forward/ambient_light/energy")));
+	if (p_render_data->environment.is_valid()) {
+		ambient_color = environment_get_ambient_light(p_render_data->environment);
+		ambient_energy = MAX(0.0f, environment_get_ambient_light_energy(p_render_data->environment));
+	}
+	reflection_data.ambient_color_energy[0] = ambient_color.r;
+	reflection_data.ambient_color_energy[1] = ambient_color.g;
+	reflection_data.ambient_color_energy[2] = ambient_color.b;
+	reflection_data.ambient_color_energy[3] = ambient_energy;
+	reflection_data.screen_grid_steps[0] = screen_size.x;
+	reflection_data.screen_grid_steps[1] = screen_size.y;
+	reflection_data.screen_grid_steps[2] = resolution;
+	reflection_data.screen_grid_steps[3] = CLAMP(int(GLOBAL_GET("rendering/voxel_forward/reflections/max_steps")), 1, 4096);
+	reflection_data.state[0] = world.directory_mask;
+	reflection_data.state[1] = indirect_cascade_initialized[0] && indirect_cascade_initialized[1] && indirect_cascade_initialized[2] ? 1 : 0;
+	reflection_data.state[2] = indirect_grid_resolution;
+	RD::get_singleton()->buffer_update(reflection_uniform_buffer, 0, sizeof(ReflectionUniformData), &reflection_data);
+
+	RID indirect_textures[INDIRECT_CASCADE_COUNT];
+	for (uint32_t cascade = 0; cascade < INDIRECT_CASCADE_COUNT; cascade++) {
+		indirect_textures[cascade] = indirect_grid_rd[cascade][0].is_valid() ? indirect_grid_rd[cascade][0] : reflection_color_grid_rd[cascade];
+	}
+	const RID resolve_shader_rid = reflection_resolve_shader.version_get_shader(reflection_resolve_shader_version, 0);
+	RD::Uniform u_depth(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ sampler, depth }));
+	RD::Uniform u_output(RD::UNIFORM_TYPE_IMAGE, 1, Vector<RID>({ output }));
+	RD::Uniform u_directory(RD::UNIFORM_TYPE_STORAGE_BUFFER, 2, Vector<RID>({ world.directory_buffer }));
+	RD::Uniform u_bricks(RD::UNIFORM_TYPE_STORAGE_BUFFER, 3, Vector<RID>({ world.brick_buffer }));
+	RD::Uniform u_color_near(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 4, Vector<RID>({ sampler, reflection_color_grid_rd[0] }));
+	RD::Uniform u_color_far(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 5, Vector<RID>({ sampler, reflection_color_grid_rd[1] }));
+	RD::Uniform u_color_distant(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 6, Vector<RID>({ sampler, reflection_color_grid_rd[2] }));
+	RD::Uniform u_indirect_near(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 7, Vector<RID>({ sampler, indirect_textures[0] }));
+	RD::Uniform u_indirect_far(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 8, Vector<RID>({ sampler, indirect_textures[1] }));
+	RD::Uniform u_indirect_distant(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 9, Vector<RID>({ sampler, indirect_textures[2] }));
+	RD::Uniform u_params(RD::UNIFORM_TYPE_UNIFORM_BUFFER, 10, Vector<RID>({ reflection_uniform_buffer }));
+	const RID uniform_set = UniformSetCacheRD::get_singleton()->get_cache(resolve_shader_rid, 0, u_depth, u_output, u_directory, u_bricks, u_color_near, u_color_far, u_color_distant, u_indirect_near, u_indirect_far, u_indirect_distant, u_params);
+
+	RENDER_TIMESTAMP("Voxel Face Reflections");
+	RD::get_singleton()->draw_command_begin_label("Voxel Face Reflections");
+	RD::ComputeListID compute_list = RD::get_singleton()->compute_list_begin();
+	RD::get_singleton()->compute_list_bind_compute_pipeline(compute_list, reflection_resolve_pipeline);
+	RD::get_singleton()->compute_list_bind_uniform_set(compute_list, uniform_set, 0);
+	RD::get_singleton()->compute_list_dispatch_threads(compute_list, screen_size.x, screen_size.y, 1);
+	RD::get_singleton()->compute_list_end();
+	RD::get_singleton()->draw_command_end_label();
+	material_storage->global_shader_parameter_set_override(SNAME("voxel_forward_reflection_intensity"), MAX(0.0f, float(GLOBAL_GET("rendering/voxel_forward/reflections/intensity"))));
+	material_storage->global_shader_parameter_set_override(SNAME("voxel_forward_reflection_ready"), true);
 }
 
 void RenderVoxelForward::_add_voxel_occupancy_uniforms(Vector<RD::Uniform> &r_uniforms) {
@@ -390,12 +741,13 @@ void RenderVoxelForward::_add_voxel_occupancy_uniforms(Vector<RD::Uniform> &r_un
 }
 
 bool RenderVoxelForward::_render_scene_custom_uses_resolved_depth() const {
-	return bool(GLOBAL_GET("rendering/voxel_forward/shadow_mask/enabled"));
+	return bool(GLOBAL_GET("rendering/voxel_forward/shadow_mask/enabled")) || bool(GLOBAL_GET("rendering/voxel_forward/reflections/enabled"));
 }
 
 void RenderVoxelForward::_render_scene_custom_pre_opaque(RenderDataRD *p_render_data, bool p_depth_prepass) {
 	if (!p_depth_prepass) {
 		RendererRD::MaterialStorage::get_singleton()->global_shader_parameter_set_override(SNAME("voxel_forward_shadow_ready"), false);
+		RendererRD::MaterialStorage::get_singleton()->global_shader_parameter_set_override(SNAME("voxel_forward_reflection_ready"), false);
 		if (shadow_mask_texture.is_valid()) {
 			RendererRD::MaterialStorage::get_singleton()->global_shader_parameter_set_override(SNAME("voxel_forward_shadow_mask"), Variant());
 			RendererRD::TextureStorage::get_singleton()->texture_free(shadow_mask_texture);
@@ -406,12 +758,25 @@ void RenderVoxelForward::_render_scene_custom_pre_opaque(RenderDataRD *p_render_
 		shadow_atlas_source_rd = RID();
 	} else {
 		_render_shadow_atlas(p_render_data);
+		_render_voxel_reflections(p_render_data);
 	}
 }
 
 void RenderVoxelForward::_render_scene(RenderDataRD *p_render_data, const Color &p_default_bg_color) {
+	RendererRD::MaterialStorage *material_storage = RendererRD::MaterialStorage::get_singleton();
+	Color ambient_color = GLOBAL_GET("rendering/voxel_forward/ambient_light/color");
+	float ambient_energy = MAX(0.0f, float(GLOBAL_GET("rendering/voxel_forward/ambient_light/energy")));
+	if (p_render_data != nullptr && p_render_data->environment.is_valid()) {
+		// Voxel Forward owns ambient evaluation, but follows the active
+		// WorldEnvironment's color and energy controls.
+		ambient_color = environment_get_ambient_light(p_render_data->environment);
+		ambient_energy = MAX(0.0f, environment_get_ambient_light_energy(p_render_data->environment));
+	}
+	material_storage->global_shader_parameter_set_override(SNAME("voxel_forward_ambient_color"), ambient_color);
+	material_storage->global_shader_parameter_set_override(SNAME("voxel_forward_ambient_energy"), ambient_energy);
 	const bool shadow_mask_enabled = bool(GLOBAL_GET("rendering/voxel_forward/shadow_mask/enabled"));
-	volume_storage.update_world_occupancy(shadow_mask_enabled);
+	const bool reflection_enabled = bool(GLOBAL_GET("rendering/voxel_forward/reflections/enabled"));
+	volume_storage.update_world_occupancy(shadow_mask_enabled || reflection_enabled);
 	const VoxelForwardVolumeStorage::WorldOccupancy &current_world = volume_storage.get_world_occupancy();
 	if (current_world.directory_buffer != bound_occupancy_directory || current_world.brick_buffer != bound_occupancy_bricks) {
 		bound_occupancy_directory = current_world.directory_buffer;

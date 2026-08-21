@@ -9,7 +9,10 @@
 
 namespace {
 
-constexpr int MAX_VOXEL_CONTACT_CANDIDATES_PER_PASS = 256;
+// Eight contacts are emitted at most. Keeping four times that many candidates
+// preserves a well-spread manifold without spending a wall-slide query testing
+// hundreds of redundant coplanar voxel contacts.
+constexpr int MAX_VOXEL_CONTACT_CANDIDATES_PER_PASS = 32;
 constexpr int MAX_VOXEL_CONTACT_CANDIDATES = MAX_VOXEL_CONTACT_CANDIDATES_PER_PASS * 3;
 constexpr int MAX_VOXEL_MANIFOLD_CONTACTS = 8;
 constexpr int MAX_EMBEDDED_EXIT_DEPTH = 8;

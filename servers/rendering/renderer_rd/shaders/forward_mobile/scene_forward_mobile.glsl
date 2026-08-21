@@ -1241,6 +1241,9 @@ void main() {
 #ifdef LIGHTING_VERTEX_USED
 	vec3 lighting_vertex = vertex;
 #endif // LIGHTING_VERTEX_USED
+#ifdef VOXEL_FACE_LIGHTING_USED
+	bool voxel_face_lighting = false;
+#endif
 #ifdef VOXEL_OCCUPANCY_SHADOWS_USED
 	bool voxel_occupancy_shadows = false;
 #endif
@@ -1346,6 +1349,20 @@ void main() {
 	view = hvec3(-normalize(vertex));
 #endif //USE_MULTIVIEW
 #endif // LIGHT_VERTEX_USED
+
+	// Keep the exact LIGHT_VERTEX for depth-dependent effects and visibility,
+	// but let raymarched materials select a stable point for view-dependent and
+	// area-light calculations. Voxel Forward writes the center of the visible
+	// voxel face so those inputs stay constant across that face.
+	vec3 lighting_evaluation_vertex = vertex;
+#ifdef LIGHTING_VERTEX_USED
+	lighting_evaluation_vertex = lighting_vertex;
+#ifdef USE_MULTIVIEW
+	view = hvec3(-normalize(lighting_evaluation_vertex - eye_offset));
+#else
+	view = hvec3(-normalize(lighting_evaluation_vertex));
+#endif // USE_MULTIVIEW
+#endif // LIGHTING_VERTEX_USED
 
 #ifdef NORMAL_USED
 	hvec3 geo_normal = normalize(normal);
@@ -1938,6 +1955,12 @@ void main() {
 	if (directional_lights_count > 0) {
 #ifndef SHADOWS_DISABLED
 		// Do shadow and lighting in two passes to reduce register pressure
+		// Conventional shadow maps include dynamic mesh casters. Temporarily use
+		// the voxel face center as their receiver so the result is face-constant.
+#ifdef LIGHTING_VERTEX_USED
+		vec3 exact_shadow_receiver_vertex = vertex;
+		vertex = lighting_vertex;
+#endif
 		half shadows[8];
 
 		half shadowmask = half(1.0);
@@ -2104,6 +2127,10 @@ void main() {
 		}
 #endif // USE_LIGHTMAP
 
+#ifdef LIGHTING_VERTEX_USED
+		vertex = exact_shadow_receiver_vertex;
+#endif
+
 #endif // SHADOWS_DISABLED
 
 #ifndef USE_VERTEX_LIGHTING
@@ -2257,7 +2284,7 @@ void main() {
 			break;
 		}
 
-		light_process_area(light_index, vertex, view, normal, vertex_ddx, vertex_ddy, f0, roughness, metallic, scene_data.taa_frame_count, albedo, alpha, screen_uv, hvec3(1.0),
+		light_process_area(light_index, vertex, lighting_evaluation_vertex, view, normal, vertex_ddx, vertex_ddy, f0, roughness, metallic, scene_data.taa_frame_count, albedo, alpha, screen_uv, hvec3(1.0),
 #ifdef LIGHT_BACKLIGHT_USED
 				backlight,
 #endif

@@ -81,6 +81,11 @@ bool _read_volume_brick_bits(const VoxelForwardVolumeStorage::Volume &p_volume, 
 			(p_brick_index / p_volume.brick_dimensions.x) % p_volume.brick_dimensions.y,
 			p_brick_index / (p_volume.brick_dimensions.x * p_volume.brick_dimensions.y));
 	const Vector3i local_start = local_brick * OCCUPANCY_BRICK_SIZE;
+	if (local_start.x + OCCUPANCY_BRICK_SIZE <= p_volume.dimensions.x &&
+			local_start.y + OCCUPANCY_BRICK_SIZE <= p_volume.dimensions.y &&
+			local_start.z + OCCUPANCY_BRICK_SIZE <= p_volume.dimensions.z) {
+		return true;
+	}
 	for (int local_index = 0; local_index < OCCUPANCY_BRICK_SIZE * OCCUPANCY_BRICK_SIZE * OCCUPANCY_BRICK_SIZE; local_index++) {
 		const Vector3i local_voxel(local_index & 7, (local_index >> 3) & 7, local_index >> 6);
 		const Vector3i volume_voxel = local_start + local_voxel;
@@ -255,6 +260,8 @@ void VoxelForwardVolumeStorage::_free_world_gpu_resources() {
 	world_occupancy.max_probe_count = 0;
 	world_occupancy.tombstone_count = 0;
 	world_occupancy.incompatible_volume_count = 0;
+	world_occupancy.last_dirty_bricks.clear();
+	world_occupancy.last_incremental_revision = 0;
 	pending_incremental_world_bricks.clear();
 	world_occupancy_free_mixed_slots.clear();
 }
@@ -516,8 +523,10 @@ bool VoxelForwardVolumeStorage::_apply_incremental_world_updates() {
 
 	world_occupancy.last_dirty_brick_count = dirty_bricks.size();
 	world_occupancy.last_uploaded_bytes = uploaded_bytes;
+	world_occupancy.last_dirty_bricks = dirty_bricks;
 	world_occupancy.incremental_update_count++;
 	world_occupancy.revision++;
+	world_occupancy.last_incremental_revision = world_occupancy.revision;
 	if (world_occupancy.tombstone_count > directory_capacity / 8 ||
 			world_occupancy.occupied_brick_count + world_occupancy.tombstone_count > directory_capacity * 3 / 4) {
 		_request_full_world_rebuild();
@@ -703,7 +712,10 @@ void VoxelForwardVolumeStorage::_build_world_occupancy(void *p_userdata) {
 		}
 	}
 	if (build->brick_bytes.is_empty()) {
-		build->brick_bytes.resize(4);
+		// Keep the CPU mirror aligned to the 64-byte unit used by incremental
+		// comparisons and uploads. A four-byte placeholder made an otherwise
+		// valid in-place rebuild fail _update_changed_buffer_units().
+		build->brick_bytes.resize(OCCUPANCY_BRICK_BYTES);
 		build->brick_bytes.fill(0);
 	}
 	build->voxel_size = world_voxel_size;
@@ -763,6 +775,8 @@ void VoxelForwardVolumeStorage::_finish_world_occupancy_build() {
 			world_occupancy.incompatible_volume_count = build->incompatible_volume_count;
 			world_occupancy.last_dirty_brick_count = build->occupied_brick_count;
 			world_occupancy.last_uploaded_bytes = build->directory_bytes.size() + build->brick_bytes.size();
+			world_occupancy.last_dirty_bricks.clear();
+			world_occupancy.last_incremental_revision = 0;
 			world_occupancy.full_rebuild_count++;
 			world_occupancy.revision++;
 			print_verbose(vformat("Voxel Forward: world occupancy built in %.2f ms and updated on GPU in %.2f ms (%d bricks, %d/%d volumes brick-aligned).", double(build->build_usec) / 1000.0, double(OS::get_singleton()->get_ticks_usec() - upload_started_usec) / 1000.0, build->occupied_brick_count, build->brick_aligned_volume_count, build->volumes.size()));
@@ -821,6 +835,8 @@ void VoxelForwardVolumeStorage::_finish_world_occupancy_build() {
 	world_occupancy.incompatible_volume_count = build->incompatible_volume_count;
 	world_occupancy.last_dirty_brick_count = build->occupied_brick_count;
 	world_occupancy.last_uploaded_bytes = build->directory_bytes.size() + build->brick_bytes.size();
+	world_occupancy.last_dirty_bricks.clear();
+	world_occupancy.last_incremental_revision = 0;
 	world_occupancy.full_rebuild_count++;
 	world_occupancy.revision++;
 	print_verbose(vformat("Voxel Forward: world occupancy built in %.2f ms and uploaded to GPU in %.2f ms (%d bricks, %d/%d volumes brick-aligned).", double(build->build_usec) / 1000.0, double(OS::get_singleton()->get_ticks_usec() - upload_started_usec) / 1000.0, build->occupied_brick_count, build->brick_aligned_volume_count, build->volumes.size()));

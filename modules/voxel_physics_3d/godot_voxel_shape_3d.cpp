@@ -99,6 +99,8 @@ void GodotVoxelShape3D::_ensure_brick_cache(int p_brick_index) const {
 					continue;
 				}
 				const uint16_t local_index = uint16_t(x + y * VoxelBrickStorage::BRICK_SIZE + z * VoxelBrickStorage::BRICK_SIZE * VoxelBrickStorage::BRICK_SIZE);
+				const uint64_t local_bit = UINT64_C(1) << (local_index & 63);
+				cache.solid_bits[local_index >> 6] |= local_bit;
 				if (!cache.uniform_solid) {
 					cache.solid_local_indices.push_back(local_index);
 				}
@@ -106,13 +108,18 @@ void GodotVoxelShape3D::_ensure_brick_cache(int p_brick_index) const {
 				if (surface_class == 1) {
 					cache.surface_local_indices.push_back(local_index);
 					cache.face_local_indices.push_back(local_index);
+					cache.surface_bits[local_index >> 6] |= local_bit;
+					cache.face_bits[local_index >> 6] |= local_bit;
 				} else if (surface_class == 2) {
 					cache.surface_local_indices.push_back(local_index);
 					cache.edge_local_indices.push_back(local_index);
-					cache.edge_bits[local_index >> 6] |= UINT64_C(1) << (local_index & 63);
+					cache.surface_bits[local_index >> 6] |= local_bit;
+					cache.edge_bits[local_index >> 6] |= local_bit;
 				} else if (surface_class == 3) {
 					cache.surface_local_indices.push_back(local_index);
 					cache.corner_local_indices.push_back(local_index);
+					cache.surface_bits[local_index >> 6] |= local_bit;
+					cache.corner_bits[local_index >> 6] |= local_bit;
 				}
 				const Vector3 center_grid = Vector3(position) + Vector3(0.5, 0.5, 0.5);
 				cache.center_sum_grid += center_grid;
@@ -127,6 +134,20 @@ void GodotVoxelShape3D::_ensure_all_brick_caches() const {
 	for (int index = 0; index < brick_caches.size(); index++) {
 		_ensure_brick_cache(index);
 	}
+}
+
+bool GodotVoxelShape3D::_brick_local_matches_feature(int p_brick_index, int p_local_index, int p_feature) const {
+	_ensure_brick_cache(p_brick_index);
+	const PhysicsBrickCache &cache = brick_caches[p_brick_index];
+	const uint64_t bit = UINT64_C(1) << (p_local_index & 63);
+	const uint64_t *bits = cache.solid_bits;
+	switch (p_feature) {
+		case 1: bits = cache.face_bits; break;
+		case 2: bits = cache.edge_bits; break;
+		case 3: bits = cache.corner_bits; break;
+		case 4: bits = cache.surface_bits; break;
+	}
+	return (bits[p_local_index >> 6] & bit) != 0;
 }
 
 bool GodotVoxelShape3D::is_edge_feature(const Vector3i &p_voxel) const {
@@ -271,21 +292,70 @@ bool GodotVoxelShape3D::_find_next_index(int p_feature, bool p_bounded, const Ve
 	}
 	const VoxelBrickStorage &storage = voxel_data->get_brick_storage();
 	const Vector3i dimensions = voxel_data->get_dimensions();
+	const Vector3i brick_dimensions = storage.get_brick_dimensions();
+	const Vector3i first_brick = p_bounded ? p_from / VoxelBrickStorage::BRICK_SIZE : Vector3i();
+	const Vector3i last_brick = p_bounded ? p_to / VoxelBrickStorage::BRICK_SIZE : brick_dimensions - Vector3i(1, 1, 1);
+	auto advance_brick = [&]() -> bool {
+		if (!p_bounded) {
+			r_brick_index++;
+			r_cursor = 0;
+			return r_brick_index < brick_caches.size();
+		}
+		Vector3i brick_position = storage.brick_index_to_position(r_brick_index);
+		brick_position.x++;
+		if (brick_position.x > last_brick.x) {
+			brick_position.x = first_brick.x;
+			brick_position.y++;
+			if (brick_position.y > last_brick.y) {
+				brick_position.y = first_brick.y;
+				brick_position.z++;
+			}
+		}
+		if (brick_position.z > last_brick.z) {
+			r_brick_index = brick_caches.size();
+			r_cursor = 0;
+			return false;
+		}
+		r_brick_index = brick_position.x + brick_position.y * brick_dimensions.x + brick_position.z * brick_dimensions.x * brick_dimensions.y;
+		r_cursor = 0;
+		return true;
+	};
 	while (r_brick_index < brick_caches.size()) {
 		const Vector3i brick_origin = storage.brick_index_to_position(r_brick_index) * VoxelBrickStorage::BRICK_SIZE;
 		if (p_bounded) {
-			// Bricks are stored with Z as the outermost coordinate. Once this is
-			// past the requested Z range, no later brick can intersect the query.
-			if (brick_origin.z > p_to.z) {
-				return false;
-			}
 			const Vector3i brick_end = (brick_origin + Vector3i(VoxelBrickStorage::BRICK_SIZE - 1, VoxelBrickStorage::BRICK_SIZE - 1, VoxelBrickStorage::BRICK_SIZE - 1)).clamp(Vector3i(), dimensions - Vector3i(1, 1, 1));
 			if (brick_end.x < p_from.x || brick_end.y < p_from.y || brick_end.z < p_from.z ||
 					brick_origin.x > p_to.x || brick_origin.y > p_to.y || brick_origin.z > p_to.z) {
-				r_brick_index++;
-				r_cursor = 0;
+				if (!advance_brick()) {
+					return false;
+				}
 				continue;
 			}
+			// Bounded motion and overlap queries usually cover only a small part of
+			// each brick. Walk that exact local box and use cached feature bits
+			// instead of filtering every entry in the brick's feature vectors.
+			const Vector3i local_from = (p_from - brick_origin).clamp(Vector3i(), Vector3i(VoxelBrickStorage::BRICK_SIZE - 1, VoxelBrickStorage::BRICK_SIZE - 1, VoxelBrickStorage::BRICK_SIZE - 1));
+			const Vector3i local_to = (p_to - brick_origin).clamp(Vector3i(), Vector3i(VoxelBrickStorage::BRICK_SIZE - 1, VoxelBrickStorage::BRICK_SIZE - 1, VoxelBrickStorage::BRICK_SIZE - 1));
+			const Vector3i local_size = local_to - local_from + Vector3i(1, 1, 1);
+			const int local_count = local_size.x * local_size.y * local_size.z;
+			while (r_cursor < local_count) {
+				const int bounded_index = r_cursor++;
+				const Vector3i local_position = local_from + Vector3i(
+						bounded_index % local_size.x,
+						(bounded_index / local_size.x) % local_size.y,
+						bounded_index / (local_size.x * local_size.y));
+				const int local_index = local_position.x + local_position.y * VoxelBrickStorage::BRICK_SIZE + local_position.z * VoxelBrickStorage::BRICK_SIZE * VoxelBrickStorage::BRICK_SIZE;
+				if (!_brick_local_matches_feature(r_brick_index, local_index, p_feature)) {
+					continue;
+				}
+				const Vector3i position = brick_origin + local_position;
+				r_index = position.x + position.y * dimensions.x + position.z * dimensions.x * dimensions.y;
+				return true;
+			}
+			if (!advance_brick()) {
+				return false;
+			}
+			continue;
 		}
 		// Reject non-overlapping bricks before materializing their collision cache.
 		// CharacterBody3D floor/wall sweeps usually touch only a handful of bricks.
@@ -311,9 +381,6 @@ bool GodotVoxelShape3D::_find_next_index(int p_feature, bool p_bounded, const Ve
 						local % VoxelBrickStorage::BRICK_SIZE,
 						(local / VoxelBrickStorage::BRICK_SIZE) % VoxelBrickStorage::BRICK_SIZE,
 						local / (VoxelBrickStorage::BRICK_SIZE * VoxelBrickStorage::BRICK_SIZE));
-				if (p_bounded && (position.x < p_from.x || position.y < p_from.y || position.z < p_from.z || position.x > p_to.x || position.y > p_to.y || position.z > p_to.z)) {
-					continue;
-				}
 				r_index = position.x + position.y * dimensions.x + position.z * dimensions.x * dimensions.y;
 				return true;
 			}
@@ -327,15 +394,13 @@ bool GodotVoxelShape3D::_find_next_index(int p_feature, bool p_bounded, const Ve
 				if (position.x >= dimensions.x || position.y >= dimensions.y || position.z >= dimensions.z) {
 					continue;
 				}
-				if (p_bounded && (position.x < p_from.x || position.y < p_from.y || position.z < p_from.z || position.x > p_to.x || position.y > p_to.y || position.z > p_to.z)) {
-					continue;
-				}
 				r_index = position.x + position.y * dimensions.x + position.z * dimensions.x * dimensions.y;
 				return true;
 			}
 		}
-		r_brick_index++;
-		r_cursor = 0;
+		if (!advance_brick()) {
+			return false;
+		}
 	}
 	return false;
 }

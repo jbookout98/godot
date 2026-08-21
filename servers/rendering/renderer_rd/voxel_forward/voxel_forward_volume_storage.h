@@ -13,6 +13,7 @@
 #include "core/templates/hash_map.h"
 #include "core/templates/hash_set.h"
 #include "core/templates/rid.h"
+#include "core/templates/vector.h"
 #include "core/variant/variant.h"
 
 namespace RendererSceneRenderImplementation {
@@ -51,6 +52,8 @@ public:
 		uint32_t incompatible_volume_count = 0;
 		uint32_t last_dirty_brick_count = 0;
 		uint32_t last_uploaded_bytes = 0;
+		Vector<Vector3i> last_dirty_bricks;
+		uint64_t last_incremental_revision = 0;
 		uint64_t incremental_update_count = 0;
 		uint64_t full_rebuild_count = 0;
 		uint64_t revision = 0;
@@ -105,6 +108,7 @@ public:
 	void update_world_occupancy(bool p_enabled);
 
 	const Volume *get_volume(RID p_base) const;
+	const HashMap<RID, Volume> &get_volumes() const { return volumes; }
 	const WorldOccupancy &get_world_occupancy() const { return world_occupancy; }
 	uint32_t get_volume_count() const { return volumes.size(); }
 	uint64_t get_occupancy_gpu_bytes() const { return occupancy_gpu_bytes; }

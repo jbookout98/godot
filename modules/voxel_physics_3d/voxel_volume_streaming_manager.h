@@ -2,6 +2,7 @@
 
 #include "core/object/object.h"
 #include "core/templates/hash_set.h"
+#include "core/templates/vector.h"
 #include "scene/resources/image_texture.h"
 
 class VoxelVolume3D;
@@ -13,12 +14,12 @@ class VoxelVolumeStreamingManager : public Object {
 	SceneTree *connected_tree = nullptr;
 	HashSet<ObjectID> volumes;
 	HashSet<ObjectID> neighbor_refresh_volumes;
+	Vector<ObjectID> neighbor_rebuild_queue;
+	int neighbor_rebuild_index = 0;
 	// Evaluate initial residency on the first process frame. Later evaluations
 	// retain the normal 12-frame cadence.
 	int frame_counter = 11;
 	bool streaming_pending = false;
-	bool initial_residency_fill = true;
-	int initial_load_batch_size = 0;
 	bool neighbors_dirty = true;
 	bool occupancy_dirty = true;
 	bool occupancy_initialized = false;
