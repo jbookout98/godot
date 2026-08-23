@@ -399,6 +399,8 @@ void VoxelVolume3D::_update_material_bindings() {
 	const bool has_specularity = specularity.is_valid();
 	const bool has_emission = emission.is_valid();
 	runtime_material->set_transparency_enabled(has_transparency);
+	runtime_material->set_texture_features(has_metallic, has_specularity, has_emission);
+	runtime_material->ensure_shader();
 	const Vector3i dimensions = voxel_data->get_dimensions();
 	const Vector3i brick_dimensions(
 			(dimensions.x + 7) / 8,
@@ -417,12 +419,9 @@ void VoxelVolume3D::_update_material_bindings() {
 	runtime_material->set_shader_parameter(
 			"u_material",
 			material.is_valid() ? material : fallback_material);
-	runtime_material->set_shader_parameter("u_metallic", has_metallic ? metallic : fallback_material);
-	runtime_material->set_shader_parameter("u_specularity", has_specularity ? specularity : fallback_material);
-	runtime_material->set_shader_parameter("u_emission", has_emission ? emission : fallback_material);
-	runtime_material->set_shader_parameter("u_has_metallic", has_metallic);
-	runtime_material->set_shader_parameter("u_has_specularity", has_specularity);
-	runtime_material->set_shader_parameter("u_has_emission", has_emission);
+	if (has_metallic) runtime_material->set_shader_parameter("u_metallic", metallic);
+	if (has_specularity) runtime_material->set_shader_parameter("u_specularity", specularity);
+	if (has_emission) runtime_material->set_shader_parameter("u_emission", emission);
 	if (has_transparency) runtime_material->set_shader_parameter("u_transparency", transparency_texture);
 	runtime_material->set_shader_parameter("u_volume_dims", dimensions);
 	runtime_material->set_shader_parameter("u_brick_dims", brick_dimensions);
@@ -558,7 +557,6 @@ void VoxelVolume3D::_rebuild_runtime_material() {
 		runtime_material->set_outline_color(Color(0.0, 0.0, 0.0, 1.0));
 		runtime_material->set_outline_width(1.0);
 	}
-	runtime_material->ensure_shader();
 }
 
 void VoxelVolume3D::_voxel_data_changed() {

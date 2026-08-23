@@ -51,6 +51,9 @@ private:
 	Color outline_color = Color(0, 0, 0, 1);
 	real_t outline_width = 1.0;
 	bool transparency_enabled = false;
+	bool metallic_texture_enabled = false;
+	bool specularity_texture_enabled = false;
+	bool emission_texture_enabled = false;
 	void _emit_ambient_occlusion_changed();
 	void _rebuild_shader();
 
@@ -105,6 +108,7 @@ public:
 	real_t get_outline_width() const;
 	void set_transparency_enabled(bool p_enabled);
 	bool is_transparency_enabled() const;
+	void set_texture_features(bool p_metallic_enabled, bool p_specularity_enabled, bool p_emission_enabled);
 	// VoxelMaterial is serialized as lightweight configuration. VoxelVolume3D
 	// calls this only on its private runtime copy so generated Shader and 3D
 	// texture resources never become scene subresources.

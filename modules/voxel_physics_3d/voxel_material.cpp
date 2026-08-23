@@ -3,6 +3,7 @@
 #include "core/config/project_settings.h"
 #include "core/math/vector4.h"
 #include "core/object/class_db.h"
+#include "core/templates/hash_map.h"
 #include "servers/rendering/rendering_method.h"
 
 static Vector4 _make_voxelized_ao_curve(real_t p_hardness, real_t p_strength) {
@@ -15,6 +16,176 @@ static Vector4 _make_voxelized_ao_curve(real_t p_hardness, real_t p_strength) {
 			strength);
 }
 
+static const char *VOXEL_FORWARD_INDIRECT_FUNCTIONS = R"SHADER(
+vec3 sample_voxel_forward_indirect_grid(sampler3D grid, vec3 origin, float cell_size, vec3 world_position, out float edge_weight) {
+	vec3 uvw = (world_position - origin) / (cell_size * float(voxel_forward_indirect_resolution));
+	vec3 edge = min(uvw, vec3(1.0) - uvw);
+	float minimum_edge = min(edge.x, min(edge.y, edge.z));
+	float transition_width = clamp(voxel_forward_indirect_transition_cells / float(voxel_forward_indirect_resolution), 1.0 / float(voxel_forward_indirect_resolution), 0.45);
+	edge_weight = smoothstep(0.0, transition_width, minimum_edge);
+	if (minimum_edge <= 0.0) {
+		return vec3(0.0);
+	}
+	return textureLod(grid, uvw, 0.0).rgb;
+}
+
+vec3 sample_voxel_forward_indirect(vec3 world_position) {
+	if (!voxel_forward_indirect_ready || voxel_forward_indirect_resolution <= 1) {
+		return vec3(0.0);
+	}
+	float distant_weight;
+	vec3 distant_light = sample_voxel_forward_indirect_grid(voxel_forward_indirect_distant, voxel_forward_indirect_distant_origin, voxel_forward_indirect_distant_cell_size, world_position, distant_weight);
+	vec3 indirect_light = distant_light * distant_weight;
+	float far_weight;
+	vec3 far_light = sample_voxel_forward_indirect_grid(voxel_forward_indirect_far, voxel_forward_indirect_far_origin, voxel_forward_indirect_far_cell_size, world_position, far_weight);
+	indirect_light = mix(indirect_light, far_light, far_weight);
+	float near_weight;
+	vec3 near_light = sample_voxel_forward_indirect_grid(voxel_forward_indirect_near, voxel_forward_indirect_near_origin, voxel_forward_indirect_near_cell_size, world_position, near_weight);
+	return mix(indirect_light, near_light, near_weight);
+}
+)SHADER";
+
+static const char *VOXEL_OUTLINE_FUNCTION = R"SHADER(
+float voxel_normal_outline(ivec3 voxel, vec3 face_position, int normal_axis) {
+	if (normal_axis < 0) return 0.0;
+	float result = 0.0;
+	for (int axis = 0; axis < 3; axis++) {
+		if (axis == normal_axis) continue;
+		ivec3 direction = ivec3(0);
+		direction[axis] = -1;
+		if (voxel_id_at(voxel + direction) == 0u) {
+			float pixel_distance = fract(face_position[axis]) / max(fwidth(face_position[axis]), 0.00001);
+			result = max(result, 1.0 - smoothstep(outline_width, outline_width + 1.0, pixel_distance));
+		}
+		direction[axis] = 1;
+		if (voxel_id_at(voxel + direction) == 0u) {
+			float pixel_distance = (1.0 - fract(face_position[axis])) / max(fwidth(face_position[axis]), 0.00001);
+			result = max(result, 1.0 - smoothstep(outline_width, outline_width + 1.0, pixel_distance));
+		}
+	}
+	return result;
+}
+)SHADER";
+
+static const char *VOXEL_AO_BASIS_FUNCTION = R"SHADER(
+void voxel_face_ao_basis(int normal_axis, out ivec3 tangent_u, out ivec3 tangent_v) {
+	if (normal_axis == 0) {
+		tangent_u = ivec3(0, 1, 0);
+		tangent_v = ivec3(0, 0, 1);
+	} else if (normal_axis == 1) {
+		tangent_u = ivec3(1, 0, 0);
+		tangent_v = ivec3(0, 0, 1);
+	} else {
+		tangent_u = ivec3(1, 0, 0);
+		tangent_v = ivec3(0, 1, 0);
+	}
+}
+)SHADER";
+
+static const char *VOXEL_AO_CORNER_FUNCTION = R"SHADER(
+float voxel_corner_ao(bool side_a, bool side_b, bool corner) {
+	if (side_a && side_b) {
+		return 0.0;
+	}
+	float occupied_count =
+			(side_a ? 1.0 : 0.0) +
+			(side_b ? 1.0 : 0.0) +
+			(corner ? 1.0 : 0.0);
+	return (3.0 - occupied_count) / 3.0;
+}
+)SHADER";
+
+static const char *VOXEL_AO_VOXELIZED_FUNCTION = R"SHADER(
+float voxel_face_ao(ivec3 voxel, vec3 face_position, int normal_axis, vec3 face_normal) {
+	if (normal_axis < 0) {
+		return 1.0;
+	}
+	ivec3 tangent_u;
+	ivec3 tangent_v;
+	voxel_face_ao_basis(normal_axis, tangent_u, tangent_v);
+	ivec3 air_voxel = voxel + ivec3(round(face_normal));
+	ivec3 cached_brick = ivec3(-2147483647);
+	uvec4 cached_directory_bytes = uvec4(0u);
+	float occupied_sides = 0.0;
+	occupied_sides += voxel_ao_id_at(air_voxel - tangent_u, cached_brick, cached_directory_bytes) != 0u ? 1.0 : 0.0;
+	occupied_sides += voxel_ao_id_at(air_voxel + tangent_u, cached_brick, cached_directory_bytes) != 0u ? 1.0 : 0.0;
+	occupied_sides += voxel_ao_id_at(air_voxel - tangent_v, cached_brick, cached_directory_bytes) != 0u ? 1.0 : 0.0;
+	occupied_sides += voxel_ao_id_at(air_voxel + tangent_v, cached_brick, cached_directory_bytes) != 0u ? 1.0 : 0.0;
+	return 1.0 - occupied_sides * 0.25;
+}
+)SHADER";
+
+static const char *VOXEL_AO_SMOOTH_FUNCTION = R"SHADER(
+float voxel_face_ao(ivec3 voxel, vec3 face_position, int normal_axis, vec3 face_normal) {
+	if (normal_axis < 0) {
+		return 1.0;
+	}
+	ivec3 tangent_u;
+	ivec3 tangent_v;
+	voxel_face_ao_basis(normal_axis, tangent_u, tangent_v);
+	ivec3 air_voxel = voxel + ivec3(round(face_normal));
+	ivec3 cached_brick = ivec3(-2147483647);
+	uvec4 cached_directory_bytes = uvec4(0u);
+	bool u_negative = voxel_ao_id_at(air_voxel - tangent_u, cached_brick, cached_directory_bytes) != 0u;
+	bool u_positive = voxel_ao_id_at(air_voxel + tangent_u, cached_brick, cached_directory_bytes) != 0u;
+	bool v_negative = voxel_ao_id_at(air_voxel - tangent_v, cached_brick, cached_directory_bytes) != 0u;
+	bool v_positive = voxel_ao_id_at(air_voxel + tangent_v, cached_brick, cached_directory_bytes) != 0u;
+	float ao_negative_negative = voxel_corner_ao(u_negative, v_negative, voxel_ao_id_at(air_voxel - tangent_u - tangent_v, cached_brick, cached_directory_bytes) != 0u);
+	float ao_positive_negative = voxel_corner_ao(u_positive, v_negative, voxel_ao_id_at(air_voxel + tangent_u - tangent_v, cached_brick, cached_directory_bytes) != 0u);
+	float ao_negative_positive = voxel_corner_ao(u_negative, v_positive, voxel_ao_id_at(air_voxel - tangent_u + tangent_v, cached_brick, cached_directory_bytes) != 0u);
+	float ao_positive_positive = voxel_corner_ao(u_positive, v_positive, voxel_ao_id_at(air_voxel + tangent_u + tangent_v, cached_brick, cached_directory_bytes) != 0u);
+	vec3 position_in_voxel = clamp(face_position - vec3(voxel), vec3(0.0), vec3(1.0));
+	vec2 face_uv;
+	if (normal_axis == 0) {
+		face_uv = position_in_voxel.yz;
+	} else if (normal_axis == 1) {
+		face_uv = position_in_voxel.xz;
+	} else {
+		face_uv = position_in_voxel.xy;
+	}
+	float negative_edge = mix(ao_negative_negative, ao_positive_negative, face_uv.x);
+	float positive_edge = mix(ao_negative_positive, ao_positive_positive, face_uv.x);
+	return mix(negative_edge, positive_edge, face_uv.y);
+}
+)SHADER";
+
+static const char *VOXEL_AO_HARD_CORNER_FUNCTION = R"SHADER(
+float voxel_face_ao(ivec3 voxel, vec3 face_position, int normal_axis, vec3 face_normal) {
+	if (normal_axis < 0) {
+		return 1.0;
+	}
+	ivec3 tangent_u;
+	ivec3 tangent_v;
+	voxel_face_ao_basis(normal_axis, tangent_u, tangent_v);
+	ivec3 air_voxel = voxel + ivec3(round(face_normal));
+	ivec3 cached_brick = ivec3(-2147483647);
+	uvec4 cached_directory_bytes = uvec4(0u);
+	bool u_negative = voxel_ao_id_at(air_voxel - tangent_u, cached_brick, cached_directory_bytes) != 0u;
+	bool u_positive = voxel_ao_id_at(air_voxel + tangent_u, cached_brick, cached_directory_bytes) != 0u;
+	bool v_negative = voxel_ao_id_at(air_voxel - tangent_v, cached_brick, cached_directory_bytes) != 0u;
+	bool v_positive = voxel_ao_id_at(air_voxel + tangent_v, cached_brick, cached_directory_bytes) != 0u;
+	float ao_negative_negative = voxel_corner_ao(u_negative, v_negative, voxel_ao_id_at(air_voxel - tangent_u - tangent_v, cached_brick, cached_directory_bytes) != 0u);
+	float ao_positive_negative = voxel_corner_ao(u_positive, v_negative, voxel_ao_id_at(air_voxel + tangent_u - tangent_v, cached_brick, cached_directory_bytes) != 0u);
+	float ao_negative_positive = voxel_corner_ao(u_negative, v_positive, voxel_ao_id_at(air_voxel - tangent_u + tangent_v, cached_brick, cached_directory_bytes) != 0u);
+	float ao_positive_positive = voxel_corner_ao(u_positive, v_positive, voxel_ao_id_at(air_voxel + tangent_u + tangent_v, cached_brick, cached_directory_bytes) != 0u);
+	vec3 position_in_voxel = clamp(face_position - vec3(voxel), vec3(0.0), vec3(1.0));
+	vec2 face_uv;
+	if (normal_axis == 0) {
+		face_uv = position_in_voxel.yz;
+	} else if (normal_axis == 1) {
+		face_uv = position_in_voxel.xz;
+	} else {
+		face_uv = position_in_voxel.xy;
+	}
+	bool positive_u = face_uv.x >= 0.5;
+	bool positive_v = face_uv.y >= 0.5;
+	if (positive_v) {
+		return positive_u ? ao_positive_positive : ao_negative_positive;
+	}
+	return positive_u ? ao_positive_negative : ao_negative_negative;
+}
+)SHADER";
+
 // The draw surface contains no vertex data. These indices synthesize an
 // outward-wound unit cube directly from VERTEX_ID.
 static const char *VOXEL_RAYMARCH_SHADER_PREFIX = R"SHADER(
@@ -23,12 +194,7 @@ uniform sampler3D u_bricks : filter_nearest, repeat_disable;
 uniform sampler3D u_neighbor_faces : filter_nearest, repeat_disable;
 uniform sampler2D u_palette : source_color, filter_nearest, repeat_disable;
 uniform sampler2D u_material : filter_nearest, repeat_disable;
-uniform sampler2D u_metallic : filter_nearest, repeat_disable;
-uniform sampler2D u_specularity : filter_nearest, repeat_disable;
-uniform sampler2D u_emission : filter_nearest, repeat_disable;
-uniform bool u_has_metallic;
-uniform bool u_has_specularity;
-uniform bool u_has_emission;
+// OPTIONAL_MATERIAL_TEXTURE_UNIFORMS
 // TRANSPARENCY_UNIFORM
 uniform ivec3 u_volume_dims = ivec3(1);
 uniform ivec3 u_brick_dims = ivec3(1);
@@ -42,39 +208,18 @@ uniform vec4 albedo_modulate : source_color = vec4(1.0);
 uniform float roughness_multiplier = 1.0;
 uniform float metallic_multiplier = 1.0;
 uniform float specularity_multiplier = 1.0;
-uniform bool outline_enabled = false;
-uniform vec4 outline_color : source_color = vec4(0.0, 0.0, 0.0, 1.0);
-uniform float outline_width = 1.0;
-uniform vec4 ambient_occlusion_color : source_color = vec4(0.0, 0.0, 0.0, 1.0);
-uniform float ambient_occlusion_strength : hint_range(0.0, 1.0) = 1.0;
-uniform float ambient_occlusion_hardness : hint_range(0.0, 1.0) = 0.5;
-uniform vec4 ambient_occlusion_voxelized_curve = vec4(0.25, 0.5, 0.75, 1.0);
-uniform int ambient_occlusion_mode = 1;
-uniform int ambient_occlusion_face_mode = 0;
+// OUTLINE_UNIFORMS
+// AO_UNIFORMS
 uniform int max_outer_steps = 256;
 uniform int max_fine_steps = 32;
 
 global uniform sampler2D voxel_forward_shadow_mask : filter_nearest, repeat_disable;
 global uniform vec3 voxel_forward_shadow_light_direction;
 global uniform bool voxel_forward_shadow_ready;
-global uniform sampler3D voxel_forward_indirect_near : filter_linear, repeat_disable;
-global uniform sampler3D voxel_forward_indirect_far : filter_linear, repeat_disable;
-global uniform sampler3D voxel_forward_indirect_distant : filter_linear, repeat_disable;
-global uniform vec3 voxel_forward_indirect_near_origin;
-global uniform vec3 voxel_forward_indirect_far_origin;
-global uniform vec3 voxel_forward_indirect_distant_origin;
-global uniform float voxel_forward_indirect_near_cell_size;
-global uniform float voxel_forward_indirect_far_cell_size;
-global uniform float voxel_forward_indirect_distant_cell_size;
-global uniform int voxel_forward_indirect_resolution;
-global uniform float voxel_forward_indirect_transition_cells;
-global uniform float voxel_forward_indirect_intensity;
-global uniform bool voxel_forward_indirect_ready;
+// VOXEL_FORWARD_INDIRECT_UNIFORMS
 global uniform vec4 voxel_forward_ambient_color : source_color;
 global uniform float voxel_forward_ambient_energy;
-global uniform sampler2D voxel_forward_reflection : filter_nearest, repeat_disable;
-global uniform bool voxel_forward_reflection_ready;
-global uniform float voxel_forward_reflection_intensity;
+// VOXEL_FORWARD_REFLECTION_UNIFORMS
 
 varying vec3 volume_proxy_position;
 varying vec3 volume_ray_origin;
@@ -119,32 +264,7 @@ vec3 disable_parallel_crossings(vec3 crossing_t, ivec3 step_direction) {
 	if (step_direction.z == 0) crossing_t.z = HUGE_DISTANCE;
 	return crossing_t;
 }
-vec3 sample_voxel_forward_indirect_grid(sampler3D grid, vec3 origin, float cell_size, vec3 world_position, out float edge_weight) {
-	vec3 uvw = (world_position - origin) / (cell_size * float(voxel_forward_indirect_resolution));
-	vec3 edge = min(uvw, vec3(1.0) - uvw);
-	float minimum_edge = min(edge.x, min(edge.y, edge.z));
-	float transition_width = clamp(voxel_forward_indirect_transition_cells / float(voxel_forward_indirect_resolution), 1.0 / float(voxel_forward_indirect_resolution), 0.45);
-	edge_weight = smoothstep(0.0, transition_width, minimum_edge);
-	if (minimum_edge <= 0.0) {
-		return vec3(0.0);
-	}
-	return textureLod(grid, uvw, 0.0).rgb;
-}
-
-vec3 sample_voxel_forward_indirect(vec3 world_position) {
-	if (!voxel_forward_indirect_ready || voxel_forward_indirect_resolution <= 1) {
-		return vec3(0.0);
-	}
-	float distant_weight;
-	vec3 distant_light = sample_voxel_forward_indirect_grid(voxel_forward_indirect_distant, voxel_forward_indirect_distant_origin, voxel_forward_indirect_distant_cell_size, world_position, distant_weight);
-	vec3 indirect_light = distant_light * distant_weight;
-	float far_weight;
-	vec3 far_light = sample_voxel_forward_indirect_grid(voxel_forward_indirect_far, voxel_forward_indirect_far_origin, voxel_forward_indirect_far_cell_size, world_position, far_weight);
-	indirect_light = mix(indirect_light, far_light, far_weight);
-	float near_weight;
-	vec3 near_light = sample_voxel_forward_indirect_grid(voxel_forward_indirect_near, voxel_forward_indirect_near_origin, voxel_forward_indirect_near_cell_size, world_position, near_weight);
-	return mix(indirect_light, near_light, near_weight);
-}
+// VOXEL_FORWARD_INDIRECT_FUNCTIONS
 
 int boundary_face_for_axis(int axis, ivec3 voxel, ivec3 step_direction) {
 	if (axis == 0 && voxel.x == 0 && step_direction.x > 0) return 0;
@@ -246,150 +366,8 @@ uint voxel_ao_id_at(ivec3 voxel, inout ivec3 cached_brick, inout uvec4 cached_di
 	return (packed_occupancy & (1u << uint(coordinate & 7))) != 0u ? 1u : 0u;
 }
 
-float voxel_normal_outline(ivec3 voxel, vec3 face_position, int normal_axis) {
-	if (!outline_enabled || normal_axis < 0) return 0.0;
-	float result = 0.0;
-	for (int axis = 0; axis < 3; axis++) {
-		if (axis == normal_axis) continue;
-		ivec3 direction = ivec3(0);
-		direction[axis] = -1;
-		if (voxel_id_at(voxel + direction) == 0u) {
-			float pixel_distance = fract(face_position[axis]) / max(fwidth(face_position[axis]), 0.00001);
-			result = max(result, 1.0 - smoothstep(outline_width, outline_width + 1.0, pixel_distance));
-		}
-		direction[axis] = 1;
-		if (voxel_id_at(voxel + direction) == 0u) {
-			float pixel_distance = (1.0 - fract(face_position[axis])) / max(fwidth(face_position[axis]), 0.00001);
-			result = max(result, 1.0 - smoothstep(outline_width, outline_width + 1.0, pixel_distance));
-		}
-	}
-	return result;
-}
-
-float voxel_corner_ao(bool side_a, bool side_b, bool corner) {
-	// When both side voxels are occupied, the corner is completely blocked.
-	if (side_a && side_b) {
-		return 0.0;
-	}
-
-	float occupied_count =
-			(side_a ? 1.0 : 0.0) +
-			(side_b ? 1.0 : 0.0) +
-			(corner ? 1.0 : 0.0);
-
-	return (3.0 - occupied_count) / 3.0;
-}
-
-float voxel_face_ao(ivec3 voxel, vec3 face_position, int normal_axis, vec3 face_normal, int ao_mode) {
-	if (normal_axis < 0) {
-		return 1.0;
-	}
-
-	ivec3 tangent_u;
-	ivec3 tangent_v;
-
-	if (normal_axis == 0) {
-		tangent_u = ivec3(0, 1, 0);
-		tangent_v = ivec3(0, 0, 1);
-	} else if (normal_axis == 1) {
-		tangent_u = ivec3(1, 0, 0);
-		tangent_v = ivec3(0, 0, 1);
-	} else {
-		tangent_u = ivec3(1, 0, 0);
-		tangent_v = ivec3(0, 1, 0);
-	}
-
-	ivec3 outward_normal = ivec3(round(face_normal));
-	ivec3 air_voxel = voxel + outward_normal;
-	// All AO samples are clustered around one face. Remembering the most recent
-	// brick avoids fetching the same directory texel four to eight times.
-	ivec3 cached_brick = ivec3(-2147483647);
-	uvec4 cached_directory_bytes = uvec4(0u);
-
-	bool u_negative = voxel_ao_id_at(air_voxel - tangent_u, cached_brick, cached_directory_bytes) != 0u;
-	bool u_positive = voxel_ao_id_at(air_voxel + tangent_u, cached_brick, cached_directory_bytes) != 0u;
-	bool v_negative = voxel_ao_id_at(air_voxel - tangent_v, cached_brick, cached_directory_bytes) != 0u;
-	bool v_positive = voxel_ao_id_at(air_voxel + tangent_v, cached_brick, cached_directory_bytes) != 0u;
-	if (ao_mode == 1) {
-		// Voxelized AO is a single value for the complete face, based on the four
-		// face-adjacent cells around it. It deliberately does not use the diagonal
-		// corner samples or the fragment position within the face.
-		float occupied_sides =
-				(u_negative ? 1.0 : 0.0) +
-				(u_positive ? 1.0 : 0.0) +
-				(v_negative ? 1.0 : 0.0) +
-				(v_positive ? 1.0 : 0.0);
-		return 1.0 - occupied_sides * 0.25;
-	}
-
-	bool corner_negative_negative =
-			voxel_ao_id_at(air_voxel - tangent_u - tangent_v, cached_brick, cached_directory_bytes) != 0u;
-	bool corner_positive_negative =
-			voxel_ao_id_at(air_voxel + tangent_u - tangent_v, cached_brick, cached_directory_bytes) != 0u;
-	bool corner_negative_positive =
-			voxel_ao_id_at(air_voxel - tangent_u + tangent_v, cached_brick, cached_directory_bytes) != 0u;
-	bool corner_positive_positive =
-			voxel_ao_id_at(air_voxel + tangent_u + tangent_v, cached_brick, cached_directory_bytes) != 0u;
-
-	float ao_negative_negative = voxel_corner_ao(
-			u_negative,
-			v_negative,
-			corner_negative_negative);
-
-	float ao_positive_negative = voxel_corner_ao(
-			u_positive,
-			v_negative,
-			corner_positive_negative);
-
-	float ao_negative_positive = voxel_corner_ao(
-			u_negative,
-			v_positive,
-			corner_negative_positive);
-
-	float ao_positive_positive = voxel_corner_ao(
-			u_positive,
-			v_positive,
-			corner_positive_positive);
-
-	// Avoid fract() wrapping to zero when the hit lies exactly on an edge.
-	vec3 position_in_voxel = clamp(
-			face_position - vec3(voxel),
-			vec3(0.0),
-			vec3(1.0));
-
-	vec2 face_uv;
-	if (normal_axis == 0) {
-		face_uv = position_in_voxel.yz;
-	} else if (normal_axis == 1) {
-		face_uv = position_in_voxel.xz;
-	} else {
-		face_uv = position_in_voxel.xy;
-	}
-
-	float negative_edge = mix(
-			ao_negative_negative,
-			ao_positive_negative,
-			face_uv.x);
-
-	float positive_edge = mix(
-			ao_negative_positive,
-			ao_positive_positive,
-			face_uv.x);
-
-	if (ao_mode == 2) {
-		// Select the closest corner without interpolation. This preserves the
-		// classic corner pattern but gives every transition a hard voxel edge.
-		bool positive_u = face_uv.x >= 0.5;
-		bool positive_v = face_uv.y >= 0.5;
-		if (positive_v) {
-			return positive_u ? ao_positive_positive : ao_negative_positive;
-		}
-		return positive_u ? ao_positive_negative : ao_negative_negative;
-	}
-
-	float smooth_ao = mix(negative_edge, positive_edge, face_uv.y);
-	return smooth_ao;
-}
+// OUTLINE_FUNCTION
+// AO_FUNCTIONS
 
 )SHADER";
 
@@ -623,38 +601,7 @@ void fragment() {
 
 	NORMAL = normalize(mat3(VIEW_MATRIX) * (MODEL_NORMAL_MATRIX * local_normal));
 
-	float voxel_ao = 1.0;
-	vec3 voxel_ao_tint = vec3(1.0);
-	bool ambient_occlusion_receives_face =
-			ambient_occlusion_face_mode == 0 ||
-			(ambient_occlusion_face_mode == 1 && local_normal.y > 0.5) ||
-			(ambient_occlusion_face_mode == 2 && local_normal.y < -0.5);
-	if (AMBIENT_OCCLUSION_ENABLED && ambient_occlusion_receives_face) {
-		float calculated_ao = voxel_face_ao(
-				hit_voxel,
-				hit_voxel_position,
-				hit_axis,
-				local_normal,
-				AMBIENT_OCCLUSION_MODE_VALUE);
-
-		float raw_occlusion = clamp(1.0 - calculated_ao, 0.0, 1.0);
-		float occlusion_amount;
-		if (AMBIENT_OCCLUSION_MODE_VALUE == 1) {
-			// Voxelized AO has only four non-zero levels. Calculate its hardness
-			// curve once on the CPU instead of running exp2() and pow() per pixel.
-			int curve_index = clamp(int(round(raw_occlusion * 4.0)) - 1, 0, 3);
-			occlusion_amount = raw_occlusion > 0.0 ? ambient_occlusion_voxelized_curve[curve_index] : 0.0;
-		} else {
-			// 0.5 is the neutral curve. Lower values spread softer occlusion into
-			// weakly blocked areas; higher values confine it to harder corners.
-			float hardness_exponent = exp2((clamp(ambient_occlusion_hardness, 0.0, 1.0) - 0.5) * 4.0);
-			occlusion_amount = pow(raw_occlusion, hardness_exponent) * clamp(ambient_occlusion_strength, 0.0, 1.0);
-		}
-		voxel_ao = 1.0 - occlusion_amount;
-		voxel_ao_tint = mix(vec3(1.0), ambient_occlusion_color.rgb, occlusion_amount);
-	}
-	AO = voxel_ao;
-	AO_LIGHT_AFFECT = 0.0;
+	// AO_OUTPUT
 
 
 
@@ -670,23 +617,35 @@ void fragment() {
 	vec2 palette_uv = vec2((float(hit_id) + 0.5) / 256.0, 0.5);
 	vec3 palette_color = textureLod(u_palette, palette_uv, 0.0).rgb;
 	vec4 material_sample = textureLod(u_material, palette_uv, 0.0);
-	float metallic = u_has_metallic ? 1.0 - textureLod(u_metallic, palette_uv, 0.0).r : material_sample.g;
-	float specularity = u_has_specularity ? 1.0 - textureLod(u_specularity, palette_uv, 0.0).r : 1.0 - material_sample.r;
-	float emission = u_has_emission ? 1.0 - textureLod(u_emission, palette_uv, 0.0).r : material_sample.b;
-	float outline = voxel_normal_outline(hit_voxel, hit_voxel_position, hit_axis) * outline_color.a;
-	ALBEDO = mix(palette_color * albedo_modulate.rgb, outline_color.rgb, outline);
+	// MATERIAL_CHANNEL_OUTPUTS
+	// ALBEDO_OUTPUT
 	ROUGHNESS = clamp((1.0 - specularity) * roughness_multiplier, 0.0, 1.0);
 	SPECULAR = clamp(specularity * specularity_multiplier, 0.0, 1.0);
 	METALLIC = clamp(metallic * metallic_multiplier, 0.0, 1.0);
 	EMISSION = palette_color * emission * emission_energy;
 	// INDIRECT_LIGHT_OUTPUT
+	// REFLECTION_OUTPUT
 	// TRANSPARENCY_OUTPUT
 }
 
 // OCCUPANCY_LIGHT
 )SHADER";
 
-static Ref<Shader> voxel_shader_cache[2][2][2][2][2][2][3];
+enum VoxelShaderFeature : uint32_t {
+	VOXEL_SHADER_TRANSPARENCY = 1u << 1,
+	VOXEL_SHADER_FORWARD_LIGHTING = 1u << 2,
+	VOXEL_SHADER_FORWARD_MASK = 1u << 3,
+	VOXEL_SHADER_FACE_CENTER_LIGHTING = 1u << 4,
+	VOXEL_SHADER_AMBIENT_OCCLUSION = 1u << 5,
+	VOXEL_SHADER_OUTLINE = 1u << 8,
+	VOXEL_SHADER_INDIRECT = 1u << 9,
+	VOXEL_SHADER_REFLECTION = 1u << 10,
+	VOXEL_SHADER_METALLIC_TEXTURE = 1u << 11,
+	VOXEL_SHADER_SPECULARITY_TEXTURE = 1u << 12,
+	VOXEL_SHADER_EMISSION_TEXTURE = 1u << 13,
+};
+
+static HashMap<uint32_t, Ref<Shader>> voxel_shader_cache;
 
 void VoxelMaterial::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_shading_mode", "mode"), &VoxelMaterial::set_shading_mode);
@@ -775,12 +734,29 @@ void VoxelMaterial::_rebuild_shader() {
 	const bool use_voxel_forward_lighting = shading_mode == SHADING_MODE_PBR && RenderingMethod::is_current_voxel_forward_method();
 	const bool use_voxel_forward_mask = use_voxel_forward_lighting &&
 			bool(GLOBAL_GET("rendering/voxel_forward/shadow_mask/enabled"));
+	const bool use_voxel_forward_indirect = shading_mode == SHADING_MODE_PBR &&
+			bool(GLOBAL_GET("rendering/voxel_forward/indirect_light/enabled"));
+	const bool use_voxel_forward_reflection = shading_mode == SHADING_MODE_PBR &&
+			bool(GLOBAL_GET("rendering/voxel_forward/reflections/enabled"));
 	// Voxel Forward is face-shaded by definition. Point and spot lights must use
 	// the same face-center receiver as directional visibility, so illumination
 	// cannot form a smooth gradient across an individual voxel face.
 	const bool use_face_center_lighting = RenderingMethod::is_current_voxel_forward_method() || lighting_position_mode == LIGHTING_POSITION_VOXEL_FACE_CENTER;
 	const int ao_mode_index = ambient_occlusion_enabled ? int(ambient_occlusion_mode) : 0;
-	Ref<Shader> &voxel_shader = voxel_shader_cache[int(shading_mode)][transparency_enabled ? 1 : 0][use_voxel_forward_lighting ? 1 : 0][use_voxel_forward_mask ? 1 : 0][use_face_center_lighting ? 1 : 0][ambient_occlusion_enabled ? 1 : 0][ao_mode_index];
+	uint32_t shader_key = uint32_t(shading_mode);
+	shader_key |= transparency_enabled ? VOXEL_SHADER_TRANSPARENCY : 0;
+	shader_key |= use_voxel_forward_lighting ? VOXEL_SHADER_FORWARD_LIGHTING : 0;
+	shader_key |= use_voxel_forward_mask ? VOXEL_SHADER_FORWARD_MASK : 0;
+	shader_key |= use_face_center_lighting ? VOXEL_SHADER_FACE_CENTER_LIGHTING : 0;
+	shader_key |= ambient_occlusion_enabled ? VOXEL_SHADER_AMBIENT_OCCLUSION : 0;
+	shader_key |= uint32_t(ao_mode_index) << 6;
+	shader_key |= outline_enabled ? VOXEL_SHADER_OUTLINE : 0;
+	shader_key |= use_voxel_forward_indirect ? VOXEL_SHADER_INDIRECT : 0;
+	shader_key |= use_voxel_forward_reflection ? VOXEL_SHADER_REFLECTION : 0;
+	shader_key |= metallic_texture_enabled ? VOXEL_SHADER_METALLIC_TEXTURE : 0;
+	shader_key |= specularity_texture_enabled ? VOXEL_SHADER_SPECULARITY_TEXTURE : 0;
+	shader_key |= emission_texture_enabled ? VOXEL_SHADER_EMISSION_TEXTURE : 0;
+	Ref<Shader> &voxel_shader = voxel_shader_cache[shader_key];
 	if (voxel_shader.is_null()) {
 		voxel_shader.instantiate();
 		// One hardware-culled proxy layer covers the projected volume.
@@ -794,8 +770,114 @@ void VoxelMaterial::_rebuild_shader() {
 			code += ", ambient_light_disabled";
 		}
 		String body = String(VOXEL_RAYMARCH_SHADER_PREFIX) + String(VOXEL_RAYMARCH_SHADER_SUFFIX);
-		body = body.replace("AMBIENT_OCCLUSION_ENABLED", ambient_occlusion_enabled ? "true" : "false");
-		body = body.replace("AMBIENT_OCCLUSION_MODE_VALUE", itos(ao_mode_index));
+		String ao_uniforms;
+		String ao_functions;
+		String ao_output = R"SHADER(
+	float voxel_ao = 1.0;
+	vec3 voxel_ao_tint = vec3(1.0);
+	AO = voxel_ao;
+	AO_LIGHT_AFFECT = 0.0;
+)SHADER";
+		if (ambient_occlusion_enabled) {
+			ao_uniforms = R"SHADER(
+uniform vec4 ambient_occlusion_color : source_color = vec4(0.0, 0.0, 0.0, 1.0);
+uniform int ambient_occlusion_face_mode = 0;
+)SHADER";
+			ao_functions = String(VOXEL_AO_BASIS_FUNCTION);
+			if (ambient_occlusion_mode == AMBIENT_OCCLUSION_MODE_VOXELIZED) {
+				ao_uniforms += "uniform vec4 ambient_occlusion_voxelized_curve = vec4(0.25, 0.5, 0.75, 1.0);\n";
+				ao_functions += VOXEL_AO_VOXELIZED_FUNCTION;
+			} else {
+				ao_uniforms += "uniform float ambient_occlusion_strength : hint_range(0.0, 1.0) = 1.0;\n";
+				ao_uniforms += "uniform float ambient_occlusion_hardness : hint_range(0.0, 1.0) = 0.5;\n";
+				ao_functions += VOXEL_AO_CORNER_FUNCTION;
+				ao_functions += ambient_occlusion_mode == AMBIENT_OCCLUSION_MODE_HARD_CORNERS ? VOXEL_AO_HARD_CORNER_FUNCTION : VOXEL_AO_SMOOTH_FUNCTION;
+			}
+			ao_output = R"SHADER(
+	float voxel_ao = 1.0;
+	vec3 voxel_ao_tint = vec3(1.0);
+	bool ambient_occlusion_receives_face =
+			ambient_occlusion_face_mode == 0 ||
+			(ambient_occlusion_face_mode == 1 && local_normal.y > 0.5) ||
+			(ambient_occlusion_face_mode == 2 && local_normal.y < -0.5);
+	if (ambient_occlusion_receives_face) {
+		float calculated_ao = voxel_face_ao(hit_voxel, hit_voxel_position, hit_axis, local_normal);
+		float raw_occlusion = clamp(1.0 - calculated_ao, 0.0, 1.0);
+)SHADER";
+			if (ambient_occlusion_mode == AMBIENT_OCCLUSION_MODE_VOXELIZED) {
+				ao_output += R"SHADER(
+		int curve_index = clamp(int(round(raw_occlusion * 4.0)) - 1, 0, 3);
+		float occlusion_amount = raw_occlusion > 0.0 ? ambient_occlusion_voxelized_curve[curve_index] : 0.0;
+)SHADER";
+			} else {
+				ao_output += R"SHADER(
+		float hardness_exponent = exp2((clamp(ambient_occlusion_hardness, 0.0, 1.0) - 0.5) * 4.0);
+		float occlusion_amount = pow(raw_occlusion, hardness_exponent) * clamp(ambient_occlusion_strength, 0.0, 1.0);
+)SHADER";
+			}
+			ao_output += R"SHADER(
+		voxel_ao = 1.0 - occlusion_amount;
+		voxel_ao_tint = mix(vec3(1.0), ambient_occlusion_color.rgb, occlusion_amount);
+	}
+	AO = voxel_ao;
+	AO_LIGHT_AFFECT = 0.0;
+)SHADER";
+		}
+		body = body.replace("// AO_UNIFORMS", ao_uniforms);
+		body = body.replace("// AO_FUNCTIONS", ao_functions);
+		body = body.replace("// AO_OUTPUT", ao_output);
+		String optional_texture_uniforms;
+		String material_channel_outputs;
+		if (metallic_texture_enabled) {
+			optional_texture_uniforms += "uniform sampler2D u_metallic : filter_nearest, repeat_disable;\n";
+			material_channel_outputs += "float metallic = 1.0 - textureLod(u_metallic, palette_uv, 0.0).r;\n\t";
+		} else {
+			material_channel_outputs += "float metallic = material_sample.g;\n\t";
+		}
+		if (specularity_texture_enabled) {
+			optional_texture_uniforms += "uniform sampler2D u_specularity : filter_nearest, repeat_disable;\n";
+			material_channel_outputs += "float specularity = 1.0 - textureLod(u_specularity, palette_uv, 0.0).r;\n\t";
+		} else {
+			material_channel_outputs += "float specularity = 1.0 - material_sample.r;\n\t";
+		}
+		if (emission_texture_enabled) {
+			optional_texture_uniforms += "uniform sampler2D u_emission : filter_nearest, repeat_disable;\n";
+			material_channel_outputs += "float emission = 1.0 - textureLod(u_emission, palette_uv, 0.0).r;";
+		} else {
+			material_channel_outputs += "float emission = material_sample.b;";
+		}
+		body = body.replace("// OPTIONAL_MATERIAL_TEXTURE_UNIFORMS", optional_texture_uniforms);
+		body = body.replace("// MATERIAL_CHANNEL_OUTPUTS", material_channel_outputs);
+		body = body.replace("// OUTLINE_UNIFORMS", outline_enabled ? String(R"SHADER(
+uniform vec4 outline_color : source_color = vec4(0.0, 0.0, 0.0, 1.0);
+uniform float outline_width = 1.0;
+)SHADER") : String());
+		body = body.replace("// OUTLINE_FUNCTION", outline_enabled ? String(VOXEL_OUTLINE_FUNCTION) : String());
+		body = body.replace("// ALBEDO_OUTPUT", outline_enabled ? String(R"SHADER(
+	float outline = voxel_normal_outline(hit_voxel, hit_voxel_position, hit_axis) * outline_color.a;
+	ALBEDO = mix(palette_color * albedo_modulate.rgb, outline_color.rgb, outline);
+)SHADER") : "ALBEDO = palette_color * albedo_modulate.rgb;");
+		body = body.replace("// VOXEL_FORWARD_INDIRECT_UNIFORMS", use_voxel_forward_indirect ? String(R"SHADER(
+global uniform sampler3D voxel_forward_indirect_near : filter_linear, repeat_disable;
+global uniform sampler3D voxel_forward_indirect_far : filter_linear, repeat_disable;
+global uniform sampler3D voxel_forward_indirect_distant : filter_linear, repeat_disable;
+global uniform vec3 voxel_forward_indirect_near_origin;
+global uniform vec3 voxel_forward_indirect_far_origin;
+global uniform vec3 voxel_forward_indirect_distant_origin;
+global uniform float voxel_forward_indirect_near_cell_size;
+global uniform float voxel_forward_indirect_far_cell_size;
+global uniform float voxel_forward_indirect_distant_cell_size;
+global uniform int voxel_forward_indirect_resolution;
+global uniform float voxel_forward_indirect_transition_cells;
+global uniform float voxel_forward_indirect_intensity;
+global uniform bool voxel_forward_indirect_ready;
+)SHADER") : String());
+		body = body.replace("// VOXEL_FORWARD_INDIRECT_FUNCTIONS", use_voxel_forward_indirect ? String(VOXEL_FORWARD_INDIRECT_FUNCTIONS) : String());
+		body = body.replace("// VOXEL_FORWARD_REFLECTION_UNIFORMS", use_voxel_forward_reflection ? String(R"SHADER(
+global uniform sampler2D voxel_forward_reflection : filter_nearest, repeat_disable;
+global uniform bool voxel_forward_reflection_ready;
+global uniform float voxel_forward_reflection_intensity;
+)SHADER") : String());
 		body = body.replace("// TRANSPARENCY_UNIFORM", transparency_enabled ? "uniform sampler2D u_transparency : filter_nearest, repeat_disable;" : "");
 		body = body.replace("// TRANSPARENCY_OUTPUT", transparency_enabled ? "ALPHA = textureLod(u_transparency, palette_uv, 0.0).r;" : "");
 		body = body.replace("// LIGHTING_VERTEX_OUTPUT", use_face_center_lighting ? String(R"SHADER(
@@ -819,11 +901,14 @@ void VoxelMaterial::_rebuild_shader() {
 	// Ambient belongs to Voxel Forward, not Forward+'s sky/IBL path. It is
 	// deliberately constant for every fragment of the voxel material color.
 	EMISSION += palette_color * voxel_forward_ambient_color.rgb * voxel_forward_ambient_energy * voxel_ao_tint;
+)SHADER") + (use_voxel_forward_indirect ? String(R"SHADER(
 	vec3 indirect_local_position = (vec3(hit_voxel) + vec3(0.5) + local_normal * 0.5) * u_voxel_size;
 	vec3 indirect_world_normal = normalize(mat3(MODEL_MATRIX) * local_normal);
 	vec3 indirect_world_position = (MODEL_MATRIX * vec4(indirect_local_position, 1.0)).xyz + indirect_world_normal * voxel_forward_indirect_near_cell_size * 0.55;
 	vec3 indirect_light = sample_voxel_forward_indirect(indirect_world_position);
 	EMISSION += palette_color * indirect_light * (voxel_forward_indirect_intensity / PI) * voxel_ao_tint;
+)SHADER") : String()) : String());
+		body = body.replace("// REFLECTION_OUTPUT", use_voxel_forward_reflection ? String(R"SHADER(
 	if (voxel_forward_reflection_ready) {
 		// The resolve pass traces one ray from the shared-world face center, so this
 		// radiance is constant across the complete voxel face, including where two
@@ -844,15 +929,20 @@ void VoxelMaterial::_rebuild_shader() {
 	set_shader_parameter("roughness_multiplier", roughness_multiplier);
 	set_shader_parameter("metallic_multiplier", metallic_multiplier);
 	set_shader_parameter("specularity_multiplier", specularity_multiplier);
-	set_shader_parameter("ambient_occlusion_color", ambient_occlusion_color);
-	set_shader_parameter("ambient_occlusion_strength", ambient_occlusion_strength);
-	set_shader_parameter("ambient_occlusion_hardness", ambient_occlusion_hardness);
-	set_shader_parameter("ambient_occlusion_voxelized_curve", _make_voxelized_ao_curve(ambient_occlusion_hardness, ambient_occlusion_strength));
-	set_shader_parameter("ambient_occlusion_mode", int(ambient_occlusion_mode));
-	set_shader_parameter("ambient_occlusion_face_mode", int(ambient_occlusion_face_mode));
-	set_shader_parameter("outline_enabled", outline_enabled);
-	set_shader_parameter("outline_color", outline_color);
-	set_shader_parameter("outline_width", outline_width);
+	if (ambient_occlusion_enabled) {
+		set_shader_parameter("ambient_occlusion_color", ambient_occlusion_color);
+		set_shader_parameter("ambient_occlusion_face_mode", int(ambient_occlusion_face_mode));
+		if (ambient_occlusion_mode == AMBIENT_OCCLUSION_MODE_VOXELIZED) {
+			set_shader_parameter("ambient_occlusion_voxelized_curve", _make_voxelized_ao_curve(ambient_occlusion_hardness, ambient_occlusion_strength));
+		} else {
+			set_shader_parameter("ambient_occlusion_strength", ambient_occlusion_strength);
+			set_shader_parameter("ambient_occlusion_hardness", ambient_occlusion_hardness);
+		}
+	}
+	if (outline_enabled) {
+		set_shader_parameter("outline_color", outline_color);
+		set_shader_parameter("outline_width", outline_width);
+	}
 }
 
 void VoxelMaterial::set_shading_mode(ShadingMode p_mode) {
@@ -913,7 +1003,7 @@ void VoxelMaterial::set_ambient_occlusion_color(const Color &p_color) {
 		return;
 	}
 	ambient_occlusion_color = p_color;
-	if (get_shader().is_valid()) {
+	if (get_shader().is_valid() && ambient_occlusion_enabled) {
 		set_shader_parameter("ambient_occlusion_color", ambient_occlusion_color);
 	}
 	_emit_ambient_occlusion_changed();
@@ -927,9 +1017,12 @@ void VoxelMaterial::set_ambient_occlusion_strength(real_t p_strength) {
 		return;
 	}
 	ambient_occlusion_strength = p_strength;
-	if (get_shader().is_valid()) {
-		set_shader_parameter("ambient_occlusion_strength", ambient_occlusion_strength);
-		set_shader_parameter("ambient_occlusion_voxelized_curve", _make_voxelized_ao_curve(ambient_occlusion_hardness, ambient_occlusion_strength));
+	if (get_shader().is_valid() && ambient_occlusion_enabled) {
+		if (ambient_occlusion_mode == AMBIENT_OCCLUSION_MODE_VOXELIZED) {
+			set_shader_parameter("ambient_occlusion_voxelized_curve", _make_voxelized_ao_curve(ambient_occlusion_hardness, ambient_occlusion_strength));
+		} else {
+			set_shader_parameter("ambient_occlusion_strength", ambient_occlusion_strength);
+		}
 	}
 	_emit_ambient_occlusion_changed();
 }
@@ -942,9 +1035,12 @@ void VoxelMaterial::set_ambient_occlusion_hardness(real_t p_hardness) {
 		return;
 	}
 	ambient_occlusion_hardness = p_hardness;
-	if (get_shader().is_valid()) {
-		set_shader_parameter("ambient_occlusion_hardness", ambient_occlusion_hardness);
-		set_shader_parameter("ambient_occlusion_voxelized_curve", _make_voxelized_ao_curve(ambient_occlusion_hardness, ambient_occlusion_strength));
+	if (get_shader().is_valid() && ambient_occlusion_enabled) {
+		if (ambient_occlusion_mode == AMBIENT_OCCLUSION_MODE_VOXELIZED) {
+			set_shader_parameter("ambient_occlusion_voxelized_curve", _make_voxelized_ao_curve(ambient_occlusion_hardness, ambient_occlusion_strength));
+		} else {
+			set_shader_parameter("ambient_occlusion_hardness", ambient_occlusion_hardness);
+		}
 	}
 	_emit_ambient_occlusion_changed();
 }
@@ -971,7 +1067,7 @@ void VoxelMaterial::set_ambient_occlusion_face_mode(AmbientOcclusionFaceMode p_m
 		return;
 	}
 	ambient_occlusion_face_mode = p_mode;
-	if (get_shader().is_valid()) {
+	if (get_shader().is_valid() && ambient_occlusion_enabled) {
 		set_shader_parameter("ambient_occlusion_face_mode", int(ambient_occlusion_face_mode));
 	}
 	_emit_ambient_occlusion_changed();
@@ -1061,7 +1157,7 @@ void VoxelMaterial::set_outline_enabled(bool p_enabled) {
 	}
 	outline_enabled = p_enabled;
 	if (get_shader().is_valid()) {
-		set_shader_parameter("outline_enabled", outline_enabled);
+		_rebuild_shader();
 	}
 	emit_changed();
 }
@@ -1103,6 +1199,20 @@ void VoxelMaterial::set_transparency_enabled(bool p_enabled) {
 
 bool VoxelMaterial::is_transparency_enabled() const { return transparency_enabled; }
 
+void VoxelMaterial::set_texture_features(bool p_metallic_enabled, bool p_specularity_enabled, bool p_emission_enabled) {
+	if (metallic_texture_enabled == p_metallic_enabled &&
+			specularity_texture_enabled == p_specularity_enabled &&
+			emission_texture_enabled == p_emission_enabled) {
+		return;
+	}
+	metallic_texture_enabled = p_metallic_enabled;
+	specularity_texture_enabled = p_specularity_enabled;
+	emission_texture_enabled = p_emission_enabled;
+	if (get_shader().is_valid()) {
+		_rebuild_shader();
+	}
+}
+
 void VoxelMaterial::ensure_shader() {
 	if (get_shader().is_null()) {
 		_rebuild_shader();
@@ -1110,21 +1220,7 @@ void VoxelMaterial::ensure_shader() {
 }
 
 void VoxelMaterial::clear_shader_cache() {
-	for (int shading = 0; shading < 2; shading++) {
-		for (int transparency = 0; transparency < 2; transparency++) {
-			for (int voxel_forward_lighting = 0; voxel_forward_lighting < 2; voxel_forward_lighting++) {
-				for (int voxel_forward_mask = 0; voxel_forward_mask < 2; voxel_forward_mask++) {
-					for (int lighting_position = 0; lighting_position < 2; lighting_position++) {
-						for (int ambient_occlusion = 0; ambient_occlusion < 2; ambient_occlusion++) {
-							for (int ambient_occlusion_mode_index = 0; ambient_occlusion_mode_index < 3; ambient_occlusion_mode_index++) {
-								voxel_shader_cache[shading][transparency][voxel_forward_lighting][voxel_forward_mask][lighting_position][ambient_occlusion][ambient_occlusion_mode_index].unref();
-							}
-						}
-					}
-				}
-			}
-		}
-	}
+	voxel_shader_cache.clear();
 }
 
 VoxelMaterial::VoxelMaterial() {}
