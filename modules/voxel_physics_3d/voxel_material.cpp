@@ -135,14 +135,14 @@ vec3 sample_voxel_forward_indirect(vec3 world_position) {
 	if (!voxel_forward_indirect_ready || voxel_forward_indirect_resolution <= 1) {
 		return vec3(0.0);
 	}
-	float near_weight;
-	vec3 near_light = sample_voxel_forward_indirect_grid(voxel_forward_indirect_near, voxel_forward_indirect_near_origin, voxel_forward_indirect_near_cell_size, world_position, near_weight);
-	float far_weight;
-	vec3 far_light = sample_voxel_forward_indirect_grid(voxel_forward_indirect_far, voxel_forward_indirect_far_origin, voxel_forward_indirect_far_cell_size, world_position, far_weight);
 	float distant_weight;
 	vec3 distant_light = sample_voxel_forward_indirect_grid(voxel_forward_indirect_distant, voxel_forward_indirect_distant_origin, voxel_forward_indirect_distant_cell_size, world_position, distant_weight);
 	vec3 indirect_light = distant_light * distant_weight;
+	float far_weight;
+	vec3 far_light = sample_voxel_forward_indirect_grid(voxel_forward_indirect_far, voxel_forward_indirect_far_origin, voxel_forward_indirect_far_cell_size, world_position, far_weight);
 	indirect_light = mix(indirect_light, far_light, far_weight);
+	float near_weight;
+	vec3 near_light = sample_voxel_forward_indirect_grid(voxel_forward_indirect_near, voxel_forward_indirect_near_origin, voxel_forward_indirect_near_cell_size, world_position, near_weight);
 	return mix(indirect_light, near_light, near_weight);
 }
 
