@@ -25,7 +25,7 @@ public:
 	struct Brick {
 		BrickType type = BRICK_EMPTY;
 		uint8_t uniform_value = 0;
-		PackedByteArray mixed_values;
+		uint32_t mixed_slot = UINT32_MAX;
 		int occupied_count = 0;
 		// Occupancy of the eight 4x4x4 subcells in this 8x8x8 brick.
 		// Derived from voxel data and never serialized.
@@ -38,11 +38,16 @@ private:
 	Vector3i dimensions = Vector3i(1, 1, 1);
 	Vector3i brick_dimensions = Vector3i(1, 1, 1);
 	Vector<Brick> bricks;
+	PackedByteArray mixed_value_pool;
+	Vector<int> mixed_slot_owners;
+	uint64_t occupied_voxel_count = 0;
 	uint64_t revision = 0;
 
 	int _get_brick_index(const Vector3i &p_brick) const;
 	int _get_local_index(const Vector3i &p_position) const;
 	int _get_valid_voxel_count(const Vector3i &p_brick) const;
+	uint8_t *_allocate_mixed_values(int p_brick_index, uint8_t p_fill_value);
+	void _release_mixed_values(int p_brick_index);
 	void _normalize_brick(int p_brick_index);
 	void _rebuild_coarse_occupancy_4(int p_brick_index);
 
@@ -61,8 +66,10 @@ public:
 	Vector3i get_dimensions() const { return dimensions; }
 	Vector3i get_brick_dimensions() const { return brick_dimensions; }
 	int get_brick_count() const { return bricks.size(); }
+	uint64_t get_occupied_voxel_count() const { return occupied_voxel_count; }
 	const Brick &get_brick(int p_index) const { return bricks[p_index]; }
 	Brick &get_brick_write(int p_index) { return bricks.write[p_index]; }
+	const uint8_t *get_brick_mixed_values(int p_index) const;
 	uint64_t get_revision() const { return revision; }
 
 	Vector3i brick_index_to_position(int p_index) const;

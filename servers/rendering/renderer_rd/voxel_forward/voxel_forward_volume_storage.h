@@ -35,6 +35,7 @@ public:
 		Vector3i dimensions;
 		Vector3i brick_dimensions;
 		Vector3i atlas_brick_dimensions;
+		uint32_t occupied_brick_count = 0;
 		float voxel_size = 0.1f;
 		uint64_t revision = 0;
 	};
@@ -94,6 +95,7 @@ private:
 
 	void _free_world_gpu_resources();
 	void _request_full_world_rebuild();
+	bool _queue_incremental_volume_extent(const Volume &p_volume);
 	bool _queue_incremental_volume_change(const Volume &p_previous, const Volume &p_current, const Vector3i &p_dirty_position, const Vector3i &p_dirty_size);
 	bool _apply_incremental_world_updates();
 	static void _build_world_occupancy(void *p_userdata);
@@ -102,7 +104,7 @@ private:
 public:
 	static VoxelForwardVolumeStorage *get_singleton() { return singleton; }
 
-	static void volume_set_on_render_thread(RID p_base, RID p_voxel_texture, RID p_brick_texture, RID p_palette_texture, RID p_material_texture, PackedByteArray p_occupancy_directory, PackedByteArray p_occupancy_bricks, Vector3i p_dimensions, Vector3i p_brick_dimensions, Vector3i p_atlas_brick_dimensions, Transform3D p_transform, float p_voxel_size, Vector3i p_dirty_position, Vector3i p_dirty_size, int64_t p_revision);
+	static void volume_set_on_render_thread(RID p_base, RID p_voxel_texture, RID p_brick_texture, RID p_palette_texture, RID p_material_texture, PackedByteArray p_occupancy_directory, PackedByteArray p_occupancy_bricks, Vector3i p_dimensions, Vector3i p_brick_dimensions, Vector3i p_atlas_brick_dimensions, Transform3D p_transform, float p_voxel_size, int p_occupied_brick_count, Vector3i p_dirty_position, Vector3i p_dirty_size, int64_t p_revision);
 	static void volume_transform_set_on_render_thread(RID p_base, Transform3D p_transform);
 	static void volume_remove_on_render_thread(RID p_base);
 	void update_world_occupancy(bool p_enabled);

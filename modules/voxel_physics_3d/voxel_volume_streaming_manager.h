@@ -21,28 +21,14 @@ class VoxelVolumeStreamingManager : public Object {
 	int frame_counter = 11;
 	bool streaming_pending = false;
 	bool neighbors_dirty = true;
-	bool occupancy_dirty = true;
-	bool occupancy_initialized = false;
-	bool occupancy_texture_created = false;
-	bool occupancy_coarse_texture_created = false;
-	int occupancy_frame_counter = 0;
-	Vector3 occupancy_center;
-	Vector3 occupancy_origin;
-	Vector3 occupancy_coarse_origin;
-	int occupancy_resolution = 1;
-	real_t occupancy_voxel_size = 0.1;
-	Ref<ImageTexture3D> occupancy_texture;
-	Ref<ImageTexture3D> occupancy_coarse_texture;
+	Ref<ImageTexture3D> voxel_forward_fallback_texture;
 
 	void _process_frame();
 	void _connect_tree(SceneTree *p_tree);
 	void _update_streaming();
 	void _update_neighbors();
 	void _update_dirty_neighbors();
-	void _update_occupancy();
-	void _register_occupancy_globals();
-	void _unregister_occupancy_globals();
-	void _upload_occupancy(const PackedByteArray &p_bytes, int p_resolution, bool p_coarse);
+	void _register_voxel_forward_globals();
 
 public:
 	static VoxelVolumeStreamingManager *singleton;
@@ -52,7 +38,6 @@ public:
 	void unregister_volume(VoxelVolume3D *p_volume);
 	void mark_neighbors_dirty() { neighbors_dirty = true; }
 	void mark_volume_neighbors_dirty(VoxelVolume3D *p_volume);
-	void mark_occupancy_dirty() { occupancy_dirty = true; }
 
 	VoxelVolumeStreamingManager();
 	~VoxelVolumeStreamingManager();

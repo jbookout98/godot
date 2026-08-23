@@ -15,6 +15,16 @@ public:
 		LIGHTING_POSITION_EXACT_HIT,
 		LIGHTING_POSITION_VOXEL_FACE_CENTER,
 	};
+	enum AmbientOcclusionMode {
+		AMBIENT_OCCLUSION_MODE_SMOOTH,
+		AMBIENT_OCCLUSION_MODE_VOXELIZED,
+		AMBIENT_OCCLUSION_MODE_HARD_CORNERS,
+	};
+	enum AmbientOcclusionFaceMode {
+		AMBIENT_OCCLUSION_FACE_MODE_ALL,
+		AMBIENT_OCCLUSION_FACE_MODE_FLOORS,
+		AMBIENT_OCCLUSION_FACE_MODE_CEILINGS,
+	};
 
 private:
 	ShadingMode shading_mode = SHADING_MODE_PBR;
@@ -30,10 +40,18 @@ private:
 	real_t metallic_multiplier = 1.0;
 	real_t specularity_multiplier = 1.0;
 	real_t emission_energy = 1.0;
+	bool ambient_occlusion_enabled = true;
+	Color ambient_occlusion_color = Color(0, 0, 0, 1);
+	real_t ambient_occlusion_strength = 1.0;
+	real_t ambient_occlusion_hardness = 0.5;
+	AmbientOcclusionMode ambient_occlusion_mode = AMBIENT_OCCLUSION_MODE_VOXELIZED;
+	AmbientOcclusionFaceMode ambient_occlusion_face_mode = AMBIENT_OCCLUSION_FACE_MODE_ALL;
+	bool ambient_occlusion_change_in_progress = false;
 	bool outline_enabled = false;
 	Color outline_color = Color(0, 0, 0, 1);
 	real_t outline_width = 1.0;
 	bool transparency_enabled = false;
+	void _emit_ambient_occlusion_changed();
 	void _rebuild_shader();
 
 protected:
@@ -46,6 +64,19 @@ public:
 	LightingPositionMode get_lighting_position_mode() const;
 	void set_emission_energy(real_t p_energy);
 	real_t get_emission_energy() const;
+	void set_ambient_occlusion_enabled(bool p_enabled);
+	bool is_ambient_occlusion_enabled() const;
+	void set_ambient_occlusion_color(const Color &p_color);
+	Color get_ambient_occlusion_color() const;
+	void set_ambient_occlusion_strength(real_t p_strength);
+	real_t get_ambient_occlusion_strength() const;
+	void set_ambient_occlusion_hardness(real_t p_hardness);
+	real_t get_ambient_occlusion_hardness() const;
+	void set_ambient_occlusion_mode(AmbientOcclusionMode p_mode);
+	AmbientOcclusionMode get_ambient_occlusion_mode() const;
+	void set_ambient_occlusion_face_mode(AmbientOcclusionFaceMode p_mode);
+	AmbientOcclusionFaceMode get_ambient_occlusion_face_mode() const;
+	bool is_ambient_occlusion_change_in_progress() const;
 	void set_albedo_modulate(const Color &p_color);
 	Color get_albedo_modulate() const;
 	void set_palette_texture(const Ref<Texture2D> &p_texture);
@@ -85,3 +116,5 @@ public:
 
 VARIANT_ENUM_CAST(VoxelMaterial::ShadingMode);
 VARIANT_ENUM_CAST(VoxelMaterial::LightingPositionMode);
+VARIANT_ENUM_CAST(VoxelMaterial::AmbientOcclusionMode);
+VARIANT_ENUM_CAST(VoxelMaterial::AmbientOcclusionFaceMode);

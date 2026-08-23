@@ -43,22 +43,6 @@ RenderVoxelForward::RenderVoxelForward() {
 	OccupancyUniformData empty_occupancy = {};
 	RD::get_singleton()->buffer_update(occupancy_uniform_buffer, 0, sizeof(OccupancyUniformData), &empty_occupancy);
 
-	Vector<String> modes;
-	modes.push_back("");
-	visibility_shader.initialize(modes);
-	visibility_shader_version = visibility_shader.version_create();
-	RID shader = visibility_shader.version_get_shader(visibility_shader_version, 0);
-
-	RD::PipelineDepthStencilState depth_stencil;
-	depth_stencil.enable_depth_test = true;
-	depth_stencil.enable_depth_write = true;
-	depth_stencil.depth_compare_operator = RD::COMPARE_OP_GREATER_OR_EQUAL;
-	for (uint32_t i = 0; i < 3; i++) {
-		// Forward Clustered keeps fixed color, specular, and velocity attachment
-		// slots in its framebuffer descriptions even when optional RIDs are empty.
-		visibility_pipelines[i].setup(shader, RD::RENDER_PRIMITIVE_TRIANGLES, RD::PipelineRasterizationState(), RD::PipelineMultisampleState(), depth_stencil, RD::PipelineColorBlendState::create_disabled(3), 0);
-	}
-
 	Vector<String> shadow_modes;
 	shadow_modes.push_back("");
 	shadow_atlas_shader.initialize(shadow_modes);
@@ -129,10 +113,34 @@ RenderVoxelForward::~RenderVoxelForward() {
 	indirect_propagate_shader.version_free(indirect_propagate_shader_version);
 	reflection_color_inject_shader.version_free(reflection_color_inject_shader_version);
 	reflection_resolve_shader.version_free(reflection_resolve_shader_version);
-	for (uint32_t i = 0; i < 3; i++) {
-		visibility_pipelines[i].clear();
+	if (visibility_resources_initialized) {
+		for (uint32_t i = 0; i < 3; i++) {
+			visibility_pipelines[i].clear();
+		}
+		visibility_shader.version_free(visibility_shader_version);
 	}
-	visibility_shader.version_free(visibility_shader_version);
+}
+
+void RenderVoxelForward::_ensure_visibility_resources() {
+	if (visibility_resources_initialized) {
+		return;
+	}
+	Vector<String> modes;
+	modes.push_back("");
+	visibility_shader.initialize(modes);
+	visibility_shader_version = visibility_shader.version_create();
+	RID shader = visibility_shader.version_get_shader(visibility_shader_version, 0);
+
+	RD::PipelineDepthStencilState depth_stencil;
+	depth_stencil.enable_depth_test = true;
+	depth_stencil.enable_depth_write = true;
+	depth_stencil.depth_compare_operator = RD::COMPARE_OP_GREATER_OR_EQUAL;
+	for (uint32_t i = 0; i < 3; i++) {
+		// Forward Clustered keeps fixed color, specular, and velocity attachment
+		// slots in its framebuffer descriptions even when optional RIDs are empty.
+		visibility_pipelines[i].setup(shader, RD::RENDER_PRIMITIVE_TRIANGLES, RD::PipelineRasterizationState(), RD::PipelineMultisampleState(), depth_stencil, RD::PipelineColorBlendState::create_disabled(3), 0);
+	}
+	visibility_resources_initialized = true;
 }
 
 void RenderVoxelForward::_free_voxel_reflections() {
@@ -428,21 +436,27 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 			propagate_push.dispatch_origin[0] = dispatch_origin.x;
 			propagate_push.dispatch_origin[1] = dispatch_origin.y;
 			propagate_push.dispatch_origin[2] = dispatch_origin.z;
-			for (int step = 0; step < propagation_steps; step++) {
-				const uint32_t source = uint32_t(step) & 1u;
+			RID propagate_uniform_sets[2];
+			for (uint32_t source = 0; source < 2; source++) {
 				const uint32_t destination = source ^ 1u;
 				RD::Uniform u_source(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ p_sampler, indirect_grid_rd[cascade][source] }));
 				RD::Uniform u_destination(RD::UNIFORM_TYPE_IMAGE, 1, Vector<RID>({ indirect_grid_rd[cascade][destination] }));
 				RD::Uniform u_propagate_directory(RD::UNIFORM_TYPE_STORAGE_BUFFER, 2, Vector<RID>({ world.directory_buffer }));
 				RD::Uniform u_propagate_bricks(RD::UNIFORM_TYPE_STORAGE_BUFFER, 3, Vector<RID>({ world.brick_buffer }));
-				const RID propagate_uniform_set = UniformSetCacheRD::get_singleton()->get_cache(propagate_shader_rid, 0, u_source, u_destination, u_propagate_directory, u_propagate_bricks);
-				RD::ComputeListID propagate_list = RD::get_singleton()->compute_list_begin();
-				RD::get_singleton()->compute_list_bind_compute_pipeline(propagate_list, indirect_propagate_pipeline);
-				RD::get_singleton()->compute_list_bind_uniform_set(propagate_list, propagate_uniform_set, 0);
-				RD::get_singleton()->compute_list_set_push_constant(propagate_list, &propagate_push, sizeof(IndirectPropagatePushConstant));
-				RD::get_singleton()->compute_list_dispatch_threads(propagate_list, dispatch_size.x, dispatch_size.y, dispatch_size.z);
-				RD::get_singleton()->compute_list_end();
+				propagate_uniform_sets[source] = UniformSetCacheRD::get_singleton()->get_cache(propagate_shader_rid, 0, u_source, u_destination, u_propagate_directory, u_propagate_bricks);
 			}
+			RD::ComputeListID propagate_list = RD::get_singleton()->compute_list_begin();
+			RD::get_singleton()->compute_list_bind_compute_pipeline(propagate_list, indirect_propagate_pipeline);
+			RD::get_singleton()->compute_list_set_push_constant(propagate_list, &propagate_push, sizeof(IndirectPropagatePushConstant));
+			for (int step = 0; step < propagation_steps; step++) {
+				const uint32_t source = uint32_t(step) & 1u;
+				RD::get_singleton()->compute_list_bind_uniform_set(propagate_list, propagate_uniform_sets[source], 0);
+				RD::get_singleton()->compute_list_dispatch_threads(propagate_list, dispatch_size.x, dispatch_size.y, dispatch_size.z);
+				if (step + 1 < propagation_steps) {
+					RD::get_singleton()->compute_list_add_barrier(propagate_list);
+				}
+			}
+			RD::get_singleton()->compute_list_end();
 			indirect_grid_origin[cascade] = grid_origins[cascade];
 			indirect_grid_cell_size[cascade] = cell_sizes[cascade];
 			indirect_cascade_initialized[cascade] = true;
@@ -802,23 +816,32 @@ void RenderVoxelForward::_render_scene(RenderDataRD *p_render_data, const Color 
 	occupancy_data.limits[3] = MAX(0.0f, float(GLOBAL_GET("rendering/voxel_forward/shadow_mask/soft_shadow_radius_voxels")));
 	RD::get_singleton()->buffer_update(occupancy_uniform_buffer, 0, sizeof(OccupancyUniformData), &occupancy_data);
 	visible_volumes.clear();
-	if (p_render_data != nullptr && p_render_data->instances != nullptr) {
+	const bool custom_visibility_enabled = bool(GLOBAL_GET("rendering/voxel_forward/experimental_custom_visibility"));
+	const bool inspect_visible_volumes = custom_visibility_enabled || is_print_verbose_enabled();
+	uint32_t visible_volume_count = 0;
+	if (inspect_visible_volumes && p_render_data != nullptr && p_render_data->instances != nullptr) {
 		for (uint32_t i = 0; i < p_render_data->instances->size(); i++) {
 			RenderGeometryInstance *instance = (*p_render_data->instances)[i];
 			const VoxelForwardVolumeStorage::Volume *volume = volume_storage.get_volume(instance->get_base());
 			if (volume == nullptr) {
 				continue;
 			}
+			visible_volume_count++;
+			if (!custom_visibility_enabled) {
+				continue;
+			}
 
 			VisibleVolume visible;
-			visible.volume = *volume;
+			visible.voxel_texture = volume->voxel_texture;
+			visible.brick_texture = volume->brick_texture;
+			visible.palette_texture = volume->palette_texture;
 			visible.transform = instance->get_transform();
-			visible.aabb = instance->get_aabb();
+			visible.dimensions = volume->dimensions;
+			visible.voxel_size = volume->voxel_size;
 			visible_volumes.push_back(visible);
 		}
 	}
 	const uint32_t registered_volume_count = volume_storage.get_volume_count();
-	const uint32_t visible_volume_count = visible_volumes.size();
 	const uint64_t occupancy_gpu_bytes = volume_storage.get_occupancy_gpu_bytes();
 	const VoxelForwardVolumeStorage::WorldOccupancy &world_occupancy = volume_storage.get_world_occupancy();
 	if (registered_volume_count != last_registered_volume_count || visible_volume_count != last_visible_volume_count || occupancy_gpu_bytes != last_occupancy_gpu_bytes || world_occupancy.revision != last_world_occupancy_revision) {
@@ -1070,6 +1093,7 @@ void RenderVoxelForward::_render_scene_custom_opaque(RenderDataRD *p_render_data
 	if (!bool(GLOBAL_GET("rendering/voxel_forward/experimental_custom_visibility")) || visible_volumes.is_empty() || p_render_data->scene_data->cam_orthogonal || p_render_data->scene_data->view_count != 1 || p_color_attachment_count < 1 || p_color_attachment_count > 3) {
 		return;
 	}
+	_ensure_visibility_resources();
 
 	RD::get_singleton()->draw_command_begin_label("Voxel Forward Opaque");
 	RendererRD::MaterialStorage *material_storage = RendererRD::MaterialStorage::get_singleton();
@@ -1086,9 +1110,9 @@ void RenderVoxelForward::_render_scene_custom_opaque(RenderDataRD *p_render_data
 	RD::get_singleton()->draw_list_bind_render_pipeline(draw_list, pipeline);
 
 	for (const VisibleVolume &visible : visible_volumes) {
-		RID voxel_texture = texture_storage->texture_get_rd_texture(visible.volume.voxel_texture);
-		RID brick_texture = texture_storage->texture_get_rd_texture(visible.volume.brick_texture);
-		RID palette_texture = texture_storage->texture_get_rd_texture(visible.volume.palette_texture, true);
+		RID voxel_texture = texture_storage->texture_get_rd_texture(visible.voxel_texture);
+		RID brick_texture = texture_storage->texture_get_rd_texture(visible.brick_texture);
+		RID palette_texture = texture_storage->texture_get_rd_texture(visible.palette_texture, true);
 		if (!voxel_texture.is_valid() || !brick_texture.is_valid() || !palette_texture.is_valid()) {
 			continue;
 		}
@@ -1098,7 +1122,7 @@ void RenderVoxelForward::_render_scene_custom_opaque(RenderDataRD *p_render_data
 		RD::Uniform u_palette(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 2, Vector<RID>({ sampler, palette_texture }));
 		RID uniform_set = uniform_set_cache->get_cache(shader, 0, u_voxels, u_bricks, u_palette);
 
-		const Transform3D voxel_to_world = visible.transform.scaled_local(Vector3(visible.volume.voxel_size, visible.volume.voxel_size, visible.volume.voxel_size));
+		const Transform3D voxel_to_world = visible.transform.scaled_local(Vector3(visible.voxel_size, visible.voxel_size, visible.voxel_size));
 		const Transform3D view_model = p_render_data->scene_data->cam_transform.affine_inverse() * voxel_to_world;
 		Projection depth_correction;
 		depth_correction.set_depth_correction(true);
@@ -1109,9 +1133,9 @@ void RenderVoxelForward::_render_scene_custom_opaque(RenderDataRD *p_render_data
 		push_constant.camera_local[0] = camera_local.x;
 		push_constant.camera_local[1] = camera_local.y;
 		push_constant.camera_local[2] = camera_local.z;
-		push_constant.volume_dimensions[0] = visible.volume.dimensions.x;
-		push_constant.volume_dimensions[1] = visible.volume.dimensions.y;
-		push_constant.volume_dimensions[2] = visible.volume.dimensions.z;
+		push_constant.volume_dimensions[0] = visible.dimensions.x;
+		push_constant.volume_dimensions[1] = visible.dimensions.y;
+		push_constant.volume_dimensions[2] = visible.dimensions.z;
 
 		RD::get_singleton()->draw_list_bind_uniform_set(draw_list, uniform_set, 0);
 		RD::get_singleton()->draw_list_set_push_constant(draw_list, &push_constant, sizeof(VisibilityPushConstant));

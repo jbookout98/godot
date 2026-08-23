@@ -49,9 +49,12 @@ namespace RendererSceneRenderImplementation {
 class RenderVoxelForward : public RenderForwardClustered {
 private:
 	struct VisibleVolume {
-		VoxelForwardVolumeStorage::Volume volume;
+		RID voxel_texture;
+		RID brick_texture;
+		RID palette_texture;
 		Transform3D transform;
-		AABB aabb;
+		Vector3i dimensions;
+		float voxel_size = 0.1f;
 	};
 
 	VoxelForwardVolumeStorage volume_storage;
@@ -63,6 +66,7 @@ private:
 	VoxelVisibilityShaderRD visibility_shader;
 	RID visibility_shader_version;
 	PipelineCacheRD visibility_pipelines[3];
+	bool visibility_resources_initialized = false;
 	VoxelShadowAtlasShaderRD shadow_atlas_shader;
 	RID shadow_atlas_shader_version;
 	RID shadow_atlas_pipeline;
@@ -191,6 +195,7 @@ private:
 	void _free_indirect_light();
 	void _render_voxel_reflections(const RenderDataRD *p_render_data);
 	void _free_voxel_reflections();
+	void _ensure_visibility_resources();
 
 protected:
 	virtual void _add_voxel_occupancy_uniforms(Vector<RD::Uniform> &r_uniforms) override;

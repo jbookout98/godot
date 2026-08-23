@@ -492,12 +492,13 @@ func _apply_positions(
 	if positions.is_empty():
 		return
 
-	_make_volume_unique(volume, body)
-
 	var new_material := 0 if voxel_action == VoxelAction.CLEAR else selected_material
 	var new_values := PackedByteArray()
 	new_values.resize(positions.size())
 	new_values.fill(new_material)
+	if not volume.has_meta(UNIQUE_META):
+		_make_volume_unique_with_edits(volume, body, positions, new_values)
+		return
 	volume.apply_voxel_edits(positions, new_values)
 
 
@@ -1238,16 +1239,24 @@ func _clear_preview_meshes() -> void:
 		_shape_preview.visible = false
 
 
-func _make_volume_unique(
+func _make_volume_unique_with_edits(
 	volume: VoxelVolume3D,
-	body: CollisionObject3D
+	body: CollisionObject3D,
+	positions: Array[Vector3i],
+	new_values: PackedByteArray
 ) -> void:
-	if volume.has_meta(UNIQUE_META):
+	var previous_data: VoxelShapeData = volume.voxel_data
+	if previous_data == null:
 		return
 
-	var previous_data: VoxelShapeData = volume.voxel_data
-	volume.make_voxel_data_unique()
-	var unique_data: VoxelShapeData = volume.voxel_data
+	var unique_data := previous_data.duplicate(true) as VoxelShapeData
+	if unique_data == null:
+		return
+
+	# Apply the first local edit before attaching the copy. The volume therefore
+	# observes one assignment/rebuild containing the final edited voxel data.
+	unique_data.apply_voxel_edits(positions, new_values)
+	volume.voxel_data = unique_data
 
 	_sync_collision_data(body, previous_data, unique_data)
 	if body.has_meta("voxel_data"):

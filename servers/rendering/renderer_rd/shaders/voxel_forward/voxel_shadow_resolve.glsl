@@ -36,6 +36,11 @@ layout(push_constant, std430) uniform Params {
 }
 params;
 
+// Voxel shadow results are deliberately stable across an entire voxel face.
+// Reuse one result for every matching face in the complete 8x8 workgroup.
+shared ivec4 quad_face_keys[64];
+shared float quad_face_visibility[64];
+
 vec2 disk_sample(int index) {
 	if (index == 0) return vec2(-0.625, -0.250);
 	if (index == 1) return vec2(0.250, -0.625);
@@ -81,42 +86,46 @@ bool voxel_occupied(ivec3 voxel_position) {
 	return (word & (1u << (local_index & 31u))) != 0u;
 }
 
-bool exposed_plane_normal(vec3 voxel_position, int axis, out float normal_sign) {
-	vec3 axis_vector = vec3(0.0);
-	axis_vector[axis] = 1.0;
-	bool negative_occupied = voxel_occupied(ivec3(floor(voxel_position - axis_vector * 0.01)));
-	bool positive_occupied = voxel_occupied(ivec3(floor(voxel_position + axis_vector * 0.01)));
-	normal_sign = negative_occupied ? 1.0 : -1.0;
-	return negative_occupied != positive_occupied;
-}
-
-bool receiver_face_data(vec3 world_position, vec3 view_ray_direction, vec3 tangent, vec3 bitangent, vec3 light_direction, out vec3 face_center_world, out vec2 depth_slope) {
+bool receiver_face_data(vec3 world_position, vec3 view_ray_direction, vec3 tangent, vec3 bitangent, vec3 light_direction, out vec3 face_center_world, out vec2 depth_slope, out ivec4 face_key) {
+	face_key = ivec4(0);
 	vec3 voxel_position = (world_position - occupancy.world_origin_voxel_size.xyz) / occupancy.world_origin_voxel_size.w;
-	vec3 plane_distance = abs(voxel_position - round(voxel_position));
 	int axis = -1;
 	float normal_sign = 1.0;
+	ivec3 occupied_voxel = ivec3(0);
+	float best_distance = 1e30;
 	float best_facing = -1.0;
 	for (int candidate_axis = 0; candidate_axis < 3; candidate_axis++) {
-		float candidate_normal_sign;
-		if (plane_distance[candidate_axis] <= 0.02 && exposed_plane_normal(voxel_position, candidate_axis, candidate_normal_sign)) {
-			float facing = abs(view_ray_direction[candidate_axis]);
-			if (facing > best_facing) {
-				axis = candidate_axis;
-				normal_sign = candidate_normal_sign;
-				best_facing = facing;
-			}
+		if (abs(view_ray_direction[candidate_axis]) <= 0.0000001) {
+			continue;
 		}
-	}
-	// Depth precision can put a distant hit slightly outside the close-plane
-	// window. In that case choose the nearest genuinely exposed voxel plane.
-	if (axis < 0) {
-		float best_distance = 1e30;
-		for (int candidate_axis = 0; candidate_axis < 3; candidate_axis++) {
-			float candidate_normal_sign;
-			if (plane_distance[candidate_axis] < best_distance && exposed_plane_normal(voxel_position, candidate_axis, candidate_normal_sign)) {
+		int first_plane = int(floor(voxel_position[candidate_axis]));
+		for (int plane_offset = 0; plane_offset < 2; plane_offset++) {
+			int plane = first_plane + plane_offset;
+			float ray_distance = (float(plane) - voxel_position[candidate_axis]) / view_ray_direction[candidate_axis];
+			vec3 plane_hit = voxel_position + view_ray_direction * ray_distance;
+			// Step toward the visible solid to make voxel-edge ties deterministic.
+			ivec3 entered_voxel = ivec3(floor(plane_hit + view_ray_direction * 0.0001));
+			ivec3 negative_voxel = entered_voxel;
+			ivec3 positive_voxel = entered_voxel;
+			negative_voxel[candidate_axis] = plane - 1;
+			positive_voxel[candidate_axis] = plane;
+			bool negative_occupied = voxel_occupied(negative_voxel);
+			bool positive_occupied = voxel_occupied(positive_voxel);
+			if (negative_occupied == positive_occupied) {
+				continue;
+			}
+			float candidate_sign = negative_occupied ? 1.0 : -1.0;
+			float facing = -candidate_sign * view_ray_direction[candidate_axis];
+			if (facing <= 0.0000001) {
+				continue;
+			}
+			float distance = abs(ray_distance);
+			if (distance < best_distance - 0.00001 || (abs(distance - best_distance) <= 0.00001 && facing > best_facing)) {
 				axis = candidate_axis;
-				normal_sign = candidate_normal_sign;
-				best_distance = plane_distance[candidate_axis];
+				normal_sign = candidate_sign;
+				occupied_voxel = negative_occupied ? negative_voxel : positive_voxel;
+				best_distance = distance;
+				best_facing = facing;
 			}
 		}
 	}
@@ -134,12 +143,10 @@ bool receiver_face_data(vec3 world_position, vec3 view_ray_direction, vec3 tange
 		depth_slope = vec2(dot(receiver_normal, tangent), dot(receiver_normal, bitangent)) / light_denominator;
 	}
 
-	vec3 axis_vector = vec3(0.0);
-	axis_vector[axis] = 1.0;
-	ivec3 occupied_voxel = normal_sign > 0.0 ? ivec3(floor(voxel_position - axis_vector * 0.01)) : ivec3(floor(voxel_position + axis_vector * 0.01));
 	vec3 face_center_voxel = vec3(occupied_voxel) + vec3(0.5);
 	face_center_voxel[axis] = float(occupied_voxel[axis]) + (normal_sign > 0.0 ? 1.0 : 0.0);
 	face_center_world = occupancy.world_origin_voxel_size.xyz + face_center_voxel * occupancy.world_origin_voxel_size.w;
+	face_key = ivec4(occupied_voxel, axis * 2 + (normal_sign > 0.0 ? 2 : 1));
 	return true;
 }
 
@@ -175,70 +182,91 @@ float bilinear_shadow_compare(vec2 filtered_atlas_position, vec2 receiver_atlas_
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
 	ivec2 output_size = params.screen_atlas_filter.xy;
-	if (any(greaterThanEqual(pixel, output_size))) {
-		return;
+	bool output_pixel = all(lessThan(pixel, output_size));
+	bool evaluate_shadow = false;
+	bool voxel_receiver = false;
+	vec3 receiver_position = vec3(0.0);
+	vec2 receiver_depth_slope = vec2(0.0);
+	ivec4 face_key = ivec4(0);
+	float final_visibility = 1.0;
+
+	if (output_pixel) {
+		ivec2 depth_size = textureSize(depth_buffer, 0);
+		ivec2 depth_pixel = clamp(ivec2((vec2(pixel) + vec2(0.5)) * vec2(depth_size) / vec2(output_size)), ivec2(0), depth_size - 1);
+		float depth = texelFetch(depth_buffer, depth_pixel, 0).r;
+		if (depth > 0.000001) {
+			vec2 ndc_xy = (vec2(depth_pixel) + vec2(0.5)) / vec2(depth_size) * 2.0 - 1.0;
+			vec4 world_h = params.inv_view_projection * vec4(ndc_xy, depth, 1.0);
+			vec3 world_position = world_h.xyz / world_h.w;
+			vec4 near_h = params.inv_view_projection * vec4(ndc_xy, 1.0, 1.0);
+			vec3 near_position = near_h.xyz / near_h.w;
+			vec3 view_ray_direction = normalize(world_position - near_position);
+			vec3 face_center_world;
+			voxel_receiver = receiver_face_data(world_position, view_ray_direction, params.tangent_near_extent.xyz, params.bitangent_far_extent.xyz, normalize(cross(params.tangent_near_extent.xyz, params.bitangent_far_extent.xyz)), face_center_world, receiver_depth_slope, face_key);
+			receiver_position = voxel_receiver ? face_center_world : world_position;
+			evaluate_shadow = true;
+		}
 	}
 
-	ivec2 depth_size = textureSize(depth_buffer, 0);
-	ivec2 depth_pixel = clamp(ivec2((vec2(pixel) + vec2(0.5)) * vec2(depth_size) / vec2(output_size)), ivec2(0), depth_size - 1);
-	float depth = texelFetch(depth_buffer, depth_pixel, 0).r;
-	if (depth <= 0.000001) {
-		imageStore(shadow_mask, pixel, vec4(1.0));
-		return;
-	}
+	uint local_index = gl_LocalInvocationIndex;
+	quad_face_keys[local_index] = voxel_receiver ? face_key : ivec4(0);
+	barrier();
 
-	vec2 ndc_xy = (vec2(depth_pixel) + vec2(0.5)) / vec2(depth_size) * 2.0 - 1.0;
-	vec4 world_h = params.inv_view_projection * vec4(ndc_xy, depth, 1.0);
-	vec3 world_position = world_h.xyz / world_h.w;
-	vec4 near_h = params.inv_view_projection * vec4(ndc_xy, 1.0, 1.0);
-	vec3 near_position = near_h.xyz / near_h.w;
-	vec3 view_ray_direction = normalize(world_position - near_position);
-	uint packed_filter = uint(params.screen_atlas_filter.w);
-	bool soft_shadow = (packed_filter & 0x80u) != 0u;
-	int sample_count = int(packed_filter & 0x7fu);
-	vec3 receiver_position = world_position;
-	vec2 receiver_depth_slope;
-	vec3 face_center_world;
-	bool voxel_receiver = receiver_face_data(world_position, view_ray_direction, params.tangent_near_extent.xyz, params.bitangent_far_extent.xyz, normalize(cross(params.tangent_near_extent.xyz, params.bitangent_far_extent.xyz)), face_center_world, receiver_depth_slope);
-	// Both hard and soft modes are voxelized: filtering changes the value for a
-	// face, never the value from pixel to pixel across that face.
+	int leader = int(local_index);
 	if (voxel_receiver) {
-		receiver_position = face_center_world;
-	}
-	vec3 relative = receiver_position - params.atlas_center_voxel_size.xyz;
-	float light_x = dot(relative, params.tangent_near_extent.xyz);
-	float light_y = dot(relative, params.bitangent_far_extent.xyz);
-	float edge_distance = max(abs(light_x), abs(light_y));
-	float near_extent = params.tangent_near_extent.w;
-	float far_extent = params.bitangent_far_extent.w;
-	int cascade = edge_distance <= near_extent * 0.95 ? 0 : 1;
-	float extent = cascade == 0 ? near_extent : far_extent;
-	if (edge_distance >= extent) {
-		imageStore(shadow_mask, pixel, vec4(1.0));
-		return;
+		for (int candidate = 0; candidate < int(local_index); candidate++) {
+			if (all(equal(quad_face_keys[candidate], face_key))) {
+				leader = candidate;
+				break;
+			}
+		}
 	}
 
-	int tile_resolution = params.screen_atlas_filter.z;
-	vec2 atlas_position = (vec2(light_x, light_y) / (2.0 * extent) + vec2(0.5)) * float(tile_resolution) - vec2(0.5);
-	vec3 light_direction = normalize(cross(params.tangent_near_extent.xyz, params.bitangent_far_extent.xyz));
-	float receiver_depth = far_extent - dot(relative, light_direction);
-	float radius_voxels = float((packed_filter >> 8u) & 0xfffu) / 16.0;
-	float bias_voxels = float((packed_filter >> 20u) & 0xfffu) / 256.0;
-	float voxel_size = params.atlas_center_voxel_size.w;
-	float radius_texels = radius_voxels * voxel_size * float(tile_resolution) / (2.0 * extent);
-	float atlas_texel_world_size = 2.0 * extent / float(tile_resolution);
-	float bias_world = bias_voxels * voxel_size;
-	if (!soft_shadow) {
-		float visibility = nearest_shadow_compare(atlas_position, receiver_depth_slope, atlas_texel_world_size, cascade, tile_resolution, receiver_depth, bias_world);
-		imageStore(shadow_mask, pixel, vec4(visibility));
-		return;
+	if (evaluate_shadow && (!voxel_receiver || leader == int(local_index))) {
+		vec3 relative = receiver_position - params.atlas_center_voxel_size.xyz;
+		float light_x = dot(relative, params.tangent_near_extent.xyz);
+		float light_y = dot(relative, params.bitangent_far_extent.xyz);
+		float edge_distance = max(abs(light_x), abs(light_y));
+		float near_extent = params.tangent_near_extent.w;
+		float far_extent = params.bitangent_far_extent.w;
+		int cascade = edge_distance <= near_extent * 0.95 ? 0 : 1;
+		float extent = cascade == 0 ? near_extent : far_extent;
+		if (edge_distance < extent) {
+			uint packed_filter = uint(params.screen_atlas_filter.w);
+			bool soft_shadow = (packed_filter & 0x80u) != 0u;
+			int sample_count = int(packed_filter & 0x7fu);
+			int tile_resolution = params.screen_atlas_filter.z;
+			vec2 atlas_position = (vec2(light_x, light_y) / (2.0 * extent) + vec2(0.5)) * float(tile_resolution) - vec2(0.5);
+			vec3 light_direction = normalize(cross(params.tangent_near_extent.xyz, params.bitangent_far_extent.xyz));
+			float receiver_depth = far_extent - dot(relative, light_direction);
+			float radius_voxels = float((packed_filter >> 8u) & 0xfffu) / 16.0;
+			float bias_voxels = float((packed_filter >> 20u) & 0xfffu) / 256.0;
+			float voxel_size = params.atlas_center_voxel_size.w;
+			float radius_texels = radius_voxels * voxel_size * float(tile_resolution) / (2.0 * extent);
+			float atlas_texel_world_size = 2.0 * extent / float(tile_resolution);
+			float bias_world = bias_voxels * voxel_size;
+			if (!soft_shadow) {
+				final_visibility = nearest_shadow_compare(atlas_position, receiver_depth_slope, atlas_texel_world_size, cascade, tile_resolution, receiver_depth, bias_world);
+			} else {
+				final_visibility = 0.0;
+				for (int sample_index = 0; sample_index < 8; sample_index++) {
+					if (sample_index >= sample_count) break;
+					vec2 offset = sample_count == 1 ? vec2(0.0) : disk_sample(sample_index) * radius_texels;
+					final_visibility += bilinear_shadow_compare(atlas_position + offset, atlas_position, receiver_depth_slope, atlas_texel_world_size, cascade, tile_resolution, receiver_depth, bias_world);
+				}
+				final_visibility /= float(max(sample_count, 1));
+			}
+		}
+		if (voxel_receiver) {
+			quad_face_visibility[local_index] = final_visibility;
+		}
 	}
-	float visibility = 0.0;
-	for (int sample_index = 0; sample_index < 8; sample_index++) {
-		if (sample_index >= sample_count) break;
-		vec2 offset = sample_count == 1 ? vec2(0.0) : disk_sample(sample_index) * radius_texels;
-		visibility += bilinear_shadow_compare(atlas_position + offset, atlas_position, receiver_depth_slope, atlas_texel_world_size, cascade, tile_resolution, receiver_depth, bias_world);
+	barrier();
+
+	if (voxel_receiver) {
+		final_visibility = quad_face_visibility[leader];
 	}
-	visibility /= float(max(sample_count, 1));
-	imageStore(shadow_mask, pixel, vec4(visibility));
+	if (output_pixel) {
+		imageStore(shadow_mask, pixel, vec4(final_visibility));
+	}
 }

@@ -8,6 +8,17 @@ GodotVoxelShape3D::GodotVoxelShape3D() :
 
 void GodotVoxelShape3D::set_data(const Variant &p_data) {
 	Ref<VoxelShapeData> new_data = p_data;
+	bool can_invalidate_incrementally = false;
+	const uint64_t previous_storage_revision = cached_revision;
+	if (voxel_data.is_valid() && voxel_data == new_data) {
+		const VoxelBrickStorage &new_storage = new_data->get_brick_storage();
+		const AABB expected_aabb(Vector3(), Vector3(new_data->get_dimensions()) * new_data->get_voxel_size());
+		can_invalidate_incrementally = cached_revision != UINT64_MAX &&
+				cached_revision != new_storage.get_revision() &&
+				cached_dimensions == new_data->get_dimensions() &&
+				brick_caches.size() == new_storage.get_brick_count() &&
+				local_aabb == expected_aabb;
+	}
 	voxel_data = new_data;
 
 	if (voxel_data.is_null()) {
@@ -19,6 +30,61 @@ void GodotVoxelShape3D::set_data(const Variant &p_data) {
 		occupied_volume = 0.0;
 		mass_properties_valid = false;
 		local_aabb = AABB();
+		configure(local_aabb);
+		return;
+	}
+
+	if (can_invalidate_incrementally) {
+		const VoxelBrickStorage &storage = voxel_data->get_brick_storage();
+		const Vector3i brick_dimensions = storage.get_brick_dimensions();
+		auto invalidate_brick = [this, &brick_dimensions](const Vector3i &p_brick) {
+			if (p_brick.x < 0 || p_brick.y < 0 || p_brick.z < 0 ||
+					p_brick.x >= brick_dimensions.x || p_brick.y >= brick_dimensions.y || p_brick.z >= brick_dimensions.z) {
+				return;
+			}
+			const int index = p_brick.x + p_brick.y * brick_dimensions.x + p_brick.z * brick_dimensions.x * brick_dimensions.y;
+			brick_caches.write[index] = PhysicsBrickCache();
+		};
+
+		solid_count = 0;
+		for (int index = 0; index < storage.get_brick_count(); index++) {
+			const VoxelBrickStorage::Brick &brick = storage.get_brick(index);
+			solid_count += brick.occupied_count;
+			if (brick.revision <= previous_storage_revision) {
+				continue;
+			}
+			const Vector3i changed_brick = storage.brick_index_to_position(index);
+			invalidate_brick(changed_brick);
+			invalidate_brick(changed_brick + Vector3i(1, 0, 0));
+			invalidate_brick(changed_brick - Vector3i(1, 0, 0));
+			invalidate_brick(changed_brick + Vector3i(0, 1, 0));
+			invalidate_brick(changed_brick - Vector3i(0, 1, 0));
+			invalidate_brick(changed_brick + Vector3i(0, 0, 1));
+			invalidate_brick(changed_brick - Vector3i(0, 0, 1));
+		}
+
+		const Vector3i dirty_size = voxel_data->get_last_dirty_size();
+		if (dirty_size.x > 0 && dirty_size.y > 0 && dirty_size.z > 0) {
+			const Vector3i dimensions = voxel_data->get_dimensions();
+			const Vector3i dirty_from = (voxel_data->get_last_dirty_position() - Vector3i(1, 1, 1)).clamp(Vector3i(), dimensions - Vector3i(1, 1, 1));
+			const Vector3i dirty_to = (voxel_data->get_last_dirty_position() + dirty_size + Vector3i(1, 1, 1)).clamp(Vector3i(1, 1, 1), dimensions);
+			const Vector3i first_brick = dirty_from / VoxelBrickStorage::BRICK_SIZE;
+			const Vector3i last_brick = (dirty_to - Vector3i(1, 1, 1)) / VoxelBrickStorage::BRICK_SIZE;
+			for (int z = first_brick.z; z <= last_brick.z; z++) {
+				for (int y = first_brick.y; y <= last_brick.y; y++) {
+					for (int x = first_brick.x; x <= last_brick.x; x++) {
+						invalidate_brick(Vector3i(x, y, z));
+					}
+				}
+			}
+		}
+
+		cached_revision = storage.get_revision();
+		const real_t voxel_size = voxel_data->get_voxel_size();
+		occupied_volume = real_t(solid_count) * voxel_size * voxel_size * voxel_size;
+		center_of_mass = local_aabb.get_center();
+		inertia_per_unit_mass = Vector3();
+		mass_properties_valid = false;
 		configure(local_aabb);
 		return;
 	}
@@ -91,14 +157,15 @@ void GodotVoxelShape3D::_ensure_brick_cache(int p_brick_index) const {
 	const Vector3i brick_origin = storage.brick_index_to_position(p_brick_index) * VoxelBrickStorage::BRICK_SIZE;
 	const Vector3i valid_size = (dimensions - brick_origin).clamp(Vector3i(), Vector3i(VoxelBrickStorage::BRICK_SIZE, VoxelBrickStorage::BRICK_SIZE, VoxelBrickStorage::BRICK_SIZE));
 	cache.uniform_solid = brick.type == VoxelBrickStorage::BRICK_UNIFORM && brick.uniform_value != 0;
+	const uint8_t *mixed_values = brick.type == VoxelBrickStorage::BRICK_MIXED ? storage.get_brick_mixed_values(p_brick_index) : nullptr;
 	for (int z = 0; z < valid_size.z; z++) {
 		for (int y = 0; y < valid_size.y; y++) {
 			for (int x = 0; x < valid_size.x; x++) {
-				const Vector3i position = brick_origin + Vector3i(x, y, z);
-				if (!voxel_data->is_solid(position)) {
+				const uint16_t local_index = uint16_t(x + y * VoxelBrickStorage::BRICK_SIZE + z * VoxelBrickStorage::BRICK_SIZE * VoxelBrickStorage::BRICK_SIZE);
+				if (!cache.uniform_solid && (mixed_values == nullptr || mixed_values[local_index] == 0)) {
 					continue;
 				}
-				const uint16_t local_index = uint16_t(x + y * VoxelBrickStorage::BRICK_SIZE + z * VoxelBrickStorage::BRICK_SIZE * VoxelBrickStorage::BRICK_SIZE);
+				const Vector3i position = brick_origin + Vector3i(x, y, z);
 				const uint64_t local_bit = UINT64_C(1) << (local_index & 63);
 				cache.solid_bits[local_index >> 6] |= local_bit;
 				if (!cache.uniform_solid) {
@@ -183,7 +250,7 @@ void GodotVoxelShape3D::_invalidate_brick_caches() {
 		solid_count += storage.get_brick(index).occupied_count;
 	}
 	cached_dimensions = voxel_data->get_dimensions();
-	cached_revision = voxel_data->get_revision();
+	cached_revision = storage.get_revision();
 	const real_t voxel_size = voxel_data->get_voxel_size();
 	occupied_volume = real_t(solid_count) * voxel_size * voxel_size * voxel_size;
 	center_of_mass = local_aabb.get_center();

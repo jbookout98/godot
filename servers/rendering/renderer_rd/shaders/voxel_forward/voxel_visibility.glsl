@@ -83,9 +83,7 @@ int maximum_axis(vec3 value) {
 	return 2;
 }
 
-int read_voxel(ivec3 cell) {
-	ivec3 brick = cell / BRICK_SIZE;
-	uvec4 directory = uvec4(round(texelFetch(brick_texture, brick, 0) * 255.0));
+int read_voxel(ivec3 cell, uvec4 directory, ivec3 atlas_brick) {
 	uint code = directory.r | (directory.g << 8u) | (directory.b << 16u);
 	if (code == 0u) {
 		return 0;
@@ -94,12 +92,6 @@ int read_voxel(ivec3 cell) {
 		return int(directory.a);
 	}
 
-	uint slot = code - 2u;
-	ivec3 atlas_bricks = max(textureSize(voxel_texture, 0) / BRICK_SIZE, ivec3(1));
-	ivec3 atlas_brick = ivec3(
-		int(slot % uint(atlas_bricks.x)),
-		int((slot / uint(atlas_bricks.x)) % uint(atlas_bricks.y)),
-		int(slot / uint(atlas_bricks.x * atlas_bricks.y)));
 	ivec3 atlas_cell = atlas_brick * BRICK_SIZE + (cell % BRICK_SIZE);
 	return int(round(texelFetch(voxel_texture, atlas_cell, 0).r * 255.0));
 }
@@ -140,9 +132,26 @@ void main() {
 	vec3 delta_t = abs(inverse_direction);
 	float current_t = enter_t;
 	int hit_id = 0;
+	ivec3 cached_brick = ivec3(-1);
+	uvec4 cached_directory = uvec4(0u);
+	ivec3 cached_atlas_brick = ivec3(0);
+	ivec3 atlas_bricks = max(textureSize(voxel_texture, 0) / BRICK_SIZE, ivec3(1));
 
 	for (int step = 0; step < 768; step++) {
-		hit_id = read_voxel(cell);
+		ivec3 brick = cell / BRICK_SIZE;
+		if (any(notEqual(brick, cached_brick))) {
+			cached_brick = brick;
+			cached_directory = uvec4(round(texelFetch(brick_texture, brick, 0) * 255.0));
+			uint code = cached_directory.r | (cached_directory.g << 8u) | (cached_directory.b << 16u);
+			if (code > 1u) {
+				uint slot = code - 2u;
+				cached_atlas_brick = ivec3(
+						int(slot % uint(atlas_bricks.x)),
+						int((slot / uint(atlas_bricks.x)) % uint(atlas_bricks.y)),
+						int(slot / uint(atlas_bricks.x * atlas_bricks.y)));
+			}
+		}
+		hit_id = read_voxel(cell, cached_directory, cached_atlas_brick);
 		if (hit_id != 0) {
 			break;
 		}

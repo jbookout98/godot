@@ -237,7 +237,7 @@ int VoxelShapeData::get_voxel(const Vector3i &p_position) const {
 
 bool VoxelShapeData::set_voxel(const Vector3i &p_position, int p_palette_index) {
 	ERR_FAIL_COND_V_MSG(!is_inside(p_position), false, "Voxel position is outside VoxelShapeData dimensions.");
-	ERR_FAIL_COND_V_MSG(p_palette_index < 0 || p_palette_index > 255, false, "palette_index must be in the range 0..255.");
+	ERR_FAIL_COND_V_MSG(p_palette_index < 0 || p_palette_index > 255, false, "palette_index must be in the range 0 - 255.");
 	if (!brick_storage.set_voxel(p_position, uint8_t(p_palette_index))) {
 		return false;
 	}

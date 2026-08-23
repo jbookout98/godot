@@ -64,9 +64,17 @@ float distance_to_cell_exit(vec3 position, vec3 direction, float cell_size) {
 
 float trace_first_occupied(vec3 ray_position, vec3 ray_direction, float maximum_distance) {
 	float traveled = 0.0;
+	ivec3 cached_brick_position = ivec3(0);
+	uint cached_brick_code = 0u;
+	bool brick_cached = false;
 	for (int step_index = 0; step_index < params.atlas_directory_steps.w && traveled < maximum_distance; step_index++) {
 		ivec3 brick_position = ivec3(floor(ray_position / 8.0));
-		uint code = find_brick(brick_position);
+		if (!brick_cached || any(notEqual(brick_position, cached_brick_position))) {
+			cached_brick_position = brick_position;
+			cached_brick_code = find_brick(brick_position);
+			brick_cached = true;
+		}
+		uint code = cached_brick_code;
 		if (code == 1u) {
 			return traveled;
 		}

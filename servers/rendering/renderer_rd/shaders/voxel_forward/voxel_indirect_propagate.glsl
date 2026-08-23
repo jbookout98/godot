@@ -65,10 +65,29 @@ bool world_occupied(vec3 world_position) {
 }
 
 bool connection_blocked(vec3 from, vec3 to) {
+	ivec3 cached_brick_position = ivec3(0);
+	uint cached_brick_code = 0u;
+	bool brick_cached = false;
 	for (int sample_index = 1; sample_index <= 3; sample_index++) {
 		float weight = float(sample_index) * 0.25;
-		if (world_occupied(mix(from, to, weight))) {
+		vec3 world_position = mix(from, to, weight);
+		ivec3 voxel_position = ivec3(floor((world_position - params.world_origin_voxel_size.xyz) / params.world_origin_voxel_size.w));
+		ivec3 brick_position = ivec3(floor(vec3(voxel_position) / 8.0));
+		if (!brick_cached || any(notEqual(brick_position, cached_brick_position))) {
+			cached_brick_position = brick_position;
+			cached_brick_code = find_brick(brick_position);
+			brick_cached = true;
+		}
+		if (cached_brick_code == 1u) {
 			return true;
+		}
+		if (cached_brick_code >= 2u) {
+			ivec3 local_voxel = voxel_position - cached_brick_position * 8;
+			uint local_index = uint(local_voxel.x + local_voxel.y * 8 + local_voxel.z * 64);
+			uint word = mixed_bricks.words[(cached_brick_code - 2u) * 16u + (local_index >> 5u)];
+			if ((word & (1u << (local_index & 31u))) != 0u) {
+				return true;
+			}
 		}
 	}
 	return false;

@@ -24,7 +24,6 @@ constexpr uint32_t WORLD_DIRECTORY_TOMBSTONE_CODE = UINT32_MAX;
 
 struct WorldBrickBits {
 	uint64_t bits[8] = {};
-	bool uniform = false;
 };
 
 struct WorldDirectoryEntry {
@@ -272,6 +271,57 @@ void VoxelForwardVolumeStorage::_request_full_world_rebuild() {
 	world_occupancy_quiet_frames = 0;
 }
 
+bool VoxelForwardVolumeStorage::_queue_incremental_volume_extent(const Volume &p_volume) {
+	if (world_occupancy_dirty || world_occupancy_build_task != WorkerThreadPool::INVALID_TASK_ID ||
+			!world_occupancy.directory_buffer.is_valid() || !world_occupancy.brick_buffer.is_valid()) {
+		return false;
+	}
+
+	Vector3i volume_voxel_origin;
+	if (!_get_aligned_volume_origin(p_volume, world_occupancy.voxel_size, world_occupancy.origin, volume_voxel_origin)) {
+		return false;
+	}
+
+	for (int z = 0; z < p_volume.brick_dimensions.z; z++) {
+		for (int y = 0; y < p_volume.brick_dimensions.y; y++) {
+			for (int x = 0; x < p_volume.brick_dimensions.x; x++) {
+				const Vector3i local_brick(x, y, z);
+				const int brick_index = x + y * p_volume.brick_dimensions.x + z * p_volume.brick_dimensions.x * p_volume.brick_dimensions.y;
+				WorldBrickBits bits;
+				if (!_read_volume_brick_bits(p_volume, brick_index, bits)) {
+					return false;
+				}
+				if (_world_brick_bits_empty(bits)) {
+					continue;
+				}
+
+				const Vector3i changed_world_begin = volume_voxel_origin + local_brick * OCCUPANCY_BRICK_SIZE;
+				const Vector3i changed_world_end = volume_voxel_origin + Vector3i(
+						MIN((x + 1) * OCCUPANCY_BRICK_SIZE, p_volume.dimensions.x),
+						MIN((y + 1) * OCCUPANCY_BRICK_SIZE, p_volume.dimensions.y),
+						MIN((z + 1) * OCCUPANCY_BRICK_SIZE, p_volume.dimensions.z));
+				const Vector3i first_world_brick(
+						_floor_divide_by_brick_size(changed_world_begin.x),
+						_floor_divide_by_brick_size(changed_world_begin.y),
+						_floor_divide_by_brick_size(changed_world_begin.z));
+				const Vector3i last_world_voxel = changed_world_end - Vector3i(1, 1, 1);
+				const Vector3i last_world_brick(
+						_floor_divide_by_brick_size(last_world_voxel.x),
+						_floor_divide_by_brick_size(last_world_voxel.y),
+						_floor_divide_by_brick_size(last_world_voxel.z));
+				for (int world_z = first_world_brick.z; world_z <= last_world_brick.z; world_z++) {
+					for (int world_y = first_world_brick.y; world_y <= last_world_brick.y; world_y++) {
+						for (int world_x = first_world_brick.x; world_x <= last_world_brick.x; world_x++) {
+							pending_incremental_world_bricks.insert(Vector3i(world_x, world_y, world_z));
+						}
+					}
+				}
+			}
+		}
+	}
+	return true;
+}
+
 bool VoxelForwardVolumeStorage::_queue_incremental_volume_change(const Volume &p_previous, const Volume &p_current, const Vector3i &p_dirty_position, const Vector3i &p_dirty_size) {
 	if (world_occupancy_dirty || world_occupancy_build_task != WorkerThreadPool::INVALID_TASK_ID ||
 			!world_occupancy.directory_buffer.is_valid() || !world_occupancy.brick_buffer.is_valid() ||
@@ -369,6 +419,29 @@ bool VoxelForwardVolumeStorage::_apply_incremental_world_updates() {
 		for (const KeyValue<RID, Volume> &entry : volumes) {
 			Vector3i volume_voxel_origin;
 			if (!_get_aligned_volume_origin(entry.value, world_occupancy.voxel_size, world_occupancy.origin, volume_voxel_origin)) {
+				continue;
+			}
+			const bool volume_brick_aligned =
+					volume_voxel_origin.x % OCCUPANCY_BRICK_SIZE == 0 &&
+					volume_voxel_origin.y % OCCUPANCY_BRICK_SIZE == 0 &&
+					volume_voxel_origin.z % OCCUPANCY_BRICK_SIZE == 0;
+			if (volume_brick_aligned) {
+				const Vector3i local_brick = world_brick_position - volume_voxel_origin / OCCUPANCY_BRICK_SIZE;
+				if (local_brick.x < 0 || local_brick.y < 0 || local_brick.z < 0 ||
+						local_brick.x >= entry.value.brick_dimensions.x ||
+						local_brick.y >= entry.value.brick_dimensions.y ||
+						local_brick.z >= entry.value.brick_dimensions.z) {
+					continue;
+				}
+				const int local_brick_index = local_brick.x +
+						local_brick.y * entry.value.brick_dimensions.x +
+						local_brick.z * entry.value.brick_dimensions.x * entry.value.brick_dimensions.y;
+				WorldBrickBits source_bits;
+				if (_read_volume_brick_bits(entry.value, local_brick_index, source_bits)) {
+					for (int word = 0; word < 8; word++) {
+						composed_bits.bits[word] |= source_bits.bits[word];
+					}
+				}
 				continue;
 			}
 			const Vector3i volume_voxel_end = volume_voxel_origin + entry.value.dimensions;
@@ -534,7 +607,7 @@ bool VoxelForwardVolumeStorage::_apply_incremental_world_updates() {
 	return true;
 }
 
-void VoxelForwardVolumeStorage::volume_set_on_render_thread(RID p_base, RID p_voxel_texture, RID p_brick_texture, RID p_palette_texture, RID p_material_texture, PackedByteArray p_occupancy_directory, PackedByteArray p_occupancy_bricks, Vector3i p_dimensions, Vector3i p_brick_dimensions, Vector3i p_atlas_brick_dimensions, Transform3D p_transform, float p_voxel_size, Vector3i p_dirty_position, Vector3i p_dirty_size, int64_t p_revision) {
+void VoxelForwardVolumeStorage::volume_set_on_render_thread(RID p_base, RID p_voxel_texture, RID p_brick_texture, RID p_palette_texture, RID p_material_texture, PackedByteArray p_occupancy_directory, PackedByteArray p_occupancy_bricks, Vector3i p_dimensions, Vector3i p_brick_dimensions, Vector3i p_atlas_brick_dimensions, Transform3D p_transform, float p_voxel_size, int p_occupied_brick_count, Vector3i p_dirty_position, Vector3i p_dirty_size, int64_t p_revision) {
 	VoxelForwardVolumeStorage *storage = get_singleton();
 	if (storage == nullptr || !p_base.is_valid()) {
 		return;
@@ -555,10 +628,13 @@ void VoxelForwardVolumeStorage::volume_set_on_render_thread(RID p_base, RID p_vo
 	volume.dimensions = p_dimensions;
 	volume.brick_dimensions = p_brick_dimensions;
 	volume.atlas_brick_dimensions = p_atlas_brick_dimensions;
+	volume.occupied_brick_count = uint32_t(MAX(0, p_occupied_brick_count));
 	volume.voxel_size = p_voxel_size;
 	volume.revision = uint64_t(p_revision);
 	const Volume *previous_volume = storage->volumes.getptr(p_base);
-	const bool incremental_change = previous_volume != nullptr && storage->_queue_incremental_volume_change(*previous_volume, volume, p_dirty_position, p_dirty_size);
+	const bool incremental_change = previous_volume != nullptr ?
+			storage->_queue_incremental_volume_change(*previous_volume, volume, p_dirty_position, p_dirty_size) :
+			storage->_queue_incremental_volume_extent(volume);
 	storage->volumes.insert(p_base, volume);
 	if (!incremental_change) {
 		storage->_request_full_world_rebuild();
@@ -581,8 +657,15 @@ void VoxelForwardVolumeStorage::volume_transform_set_on_render_thread(RID p_base
 void VoxelForwardVolumeStorage::volume_remove_on_render_thread(RID p_base) {
 	VoxelForwardVolumeStorage *storage = get_singleton();
 	if (storage != nullptr) {
+		const Volume *previous_volume = storage->volumes.getptr(p_base);
+		if (previous_volume == nullptr) {
+			return;
+		}
+		const bool incremental_change = storage->_queue_incremental_volume_extent(*previous_volume);
 		storage->volumes.erase(p_base);
-		storage->_request_full_world_rebuild();
+		if (!incremental_change) {
+			storage->_request_full_world_rebuild();
+		}
 	}
 }
 
@@ -592,7 +675,7 @@ void VoxelForwardVolumeStorage::_build_world_occupancy(void *p_userdata) {
 	HashMap<Vector3i, WorldBrickBits> world_bricks;
 	uint64_t source_brick_capacity = 0;
 	for (const Volume &volume : build->volumes) {
-		source_brick_capacity += uint64_t(volume.brick_dimensions.x) * uint64_t(volume.brick_dimensions.y) * uint64_t(volume.brick_dimensions.z);
+		source_brick_capacity += volume.occupied_brick_count;
 	}
 	world_bricks.reserve(uint32_t(MIN(source_brick_capacity, uint64_t(UINT32_MAX))));
 	float world_voxel_size = 0.0f;
@@ -605,12 +688,7 @@ void VoxelForwardVolumeStorage::_build_world_occupancy(void *p_userdata) {
 		}
 	}
 	auto get_world_brick = [&world_bricks](const Vector3i &p_position) -> WorldBrickBits * {
-		WorldBrickBits *world_brick = world_bricks.getptr(p_position);
-		if (world_brick == nullptr) {
-			world_bricks.insert(p_position, WorldBrickBits());
-			world_brick = world_bricks.getptr(p_position);
-		}
-		return world_brick;
+		return &world_bricks[p_position];
 	};
 	for (const Volume &volume : build->volumes) {
 		Vector3i volume_voxel_origin;
@@ -657,20 +735,39 @@ void VoxelForwardVolumeStorage::_build_world_occupancy(void *p_userdata) {
 				}
 				continue;
 			}
+
+			// An integer-shifted 8x8x8 source brick overlaps at most two bricks
+			// per axis. Accumulate those eight possible masks locally so sparse
+			// world-map hashing happens per destination brick, not per voxel.
 			const Vector3i local_voxel_start = local_brick * OCCUPANCY_BRICK_SIZE;
+			const Vector3i source_world_start = volume_voxel_origin + local_voxel_start;
+			const Vector3i first_world_brick(
+					_floor_divide_by_brick_size(source_world_start.x),
+					_floor_divide_by_brick_size(source_world_start.y),
+					_floor_divide_by_brick_size(source_world_start.z));
+			const Vector3i first_world_local = source_world_start - first_world_brick * OCCUPANCY_BRICK_SIZE;
+			WorldBrickBits split_occupancy[8] = {};
 			for (int local_index = 0; local_index < OCCUPANCY_BRICK_SIZE * OCCUPANCY_BRICK_SIZE * OCCUPANCY_BRICK_SIZE; local_index++) {
 				if ((source_occupancy.bits[local_index >> 6] & (uint64_t(1) << (local_index & 63))) == 0) {
 					continue;
 				}
 				const Vector3i local_voxel(local_index & 7, (local_index >> 3) & 7, local_index >> 6);
-				const Vector3i volume_voxel = local_voxel_start + local_voxel;
-				const Vector3i world_voxel = volume_voxel_origin + volume_voxel;
-				const Vector3i world_brick_position(_floor_divide_by_brick_size(world_voxel.x), _floor_divide_by_brick_size(world_voxel.y), _floor_divide_by_brick_size(world_voxel.z));
-				const Vector3i world_local = world_voxel - world_brick_position * OCCUPANCY_BRICK_SIZE;
-				WorldBrickBits *world_brick = get_world_brick(world_brick_position);
+				const Vector3i unwrapped_local = first_world_local + local_voxel;
+				const Vector3i destination_offset(unwrapped_local.x >> 3, unwrapped_local.y >> 3, unwrapped_local.z >> 3);
+				const int destination_index = destination_offset.x | (destination_offset.y << 1) | (destination_offset.z << 2);
+				const Vector3i world_local(unwrapped_local.x & 7, unwrapped_local.y & 7, unwrapped_local.z & 7);
 				const int world_local_index = world_local.x + world_local.y * OCCUPANCY_BRICK_SIZE + world_local.z * OCCUPANCY_BRICK_SIZE * OCCUPANCY_BRICK_SIZE;
-				const uint64_t world_bit = uint64_t(1) << (world_local_index & 63);
-				world_brick->bits[world_local_index >> 6] |= world_bit;
+				split_occupancy[destination_index].bits[world_local_index >> 6] |= uint64_t(1) << (world_local_index & 63);
+			}
+			for (int destination_index = 0; destination_index < 8; destination_index++) {
+				if (_world_brick_bits_empty(split_occupancy[destination_index])) {
+					continue;
+				}
+				const Vector3i destination_offset(destination_index & 1, (destination_index >> 1) & 1, destination_index >> 2);
+				WorldBrickBits *world_brick = get_world_brick(first_world_brick + destination_offset);
+				for (int word = 0; word < 8; word++) {
+					world_brick->bits[word] |= split_occupancy[destination_index].bits[word];
+				}
 			}
 		}
 	}

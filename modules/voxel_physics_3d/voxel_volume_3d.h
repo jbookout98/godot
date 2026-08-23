@@ -24,6 +24,8 @@ public:
 		NEIGHBOR_POSITIVE_Z,
 		NEIGHBOR_FACE_COUNT,
 	};
+	static constexpr int NEIGHBOR_DIAGONAL_COUNT = 20;
+	static constexpr int NEIGHBOR_TEXTURE_LAYER_COUNT = NEIGHBOR_FACE_COUNT + NEIGHBOR_DIAGONAL_COUNT;
 
 private:
 
@@ -43,17 +45,20 @@ private:
 	// never allocate voxel payload on the GPU.
 	Ref<ImageTexture3D> mixed_brick_atlas;
 	Ref<ImageTexture3D> brick_directory_texture;
-	// Six 2D boundary slices packed as a shallow 3D texture. They contain only
-	// neighbor occupancy and are rebuilt when adjacency or voxel revisions change.
+	// Six 2D face slices followed by twelve packed edge strips and eight corner
+	// bits. They contain only neighbor occupancy and are rebuilt on adjacency edits.
 	Ref<ImageTexture3D> neighbor_face_texture;
 	Ref<ImageTexture3D> fallback_neighbor_face_texture;
 	ObjectID neighbor_ids[NEIGHBOR_FACE_COUNT];
 	uint64_t neighbor_revisions[NEIGHBOR_FACE_COUNT] = {
 		UINT64_MAX, UINT64_MAX, UINT64_MAX, UINT64_MAX, UINT64_MAX, UINT64_MAX
 	};
+	ObjectID neighbor_diagonal_ids[NEIGHBOR_DIAGONAL_COUNT];
+	uint64_t neighbor_diagonal_revisions[NEIGHBOR_DIAGONAL_COUNT];
 	uint64_t neighbor_self_revision = UINT64_MAX;
 	Vector3i neighbor_self_dimensions;
 	int neighbor_mask = 0;
+	int neighbor_diagonal_mask = 0;
 	Vector3i atlas_brick_dimensions = Vector3i(1, 1, 1);
 	uint64_t rendered_revision = UINT64_MAX;
 	Vector3i voxel_forward_dirty_position;
@@ -80,6 +85,7 @@ private:
 	void _rebuild_volume_textures();
 	void _rebuild_runtime_material();
 	void _rebuild_procedural_surface();
+	void _ensure_shadow_proxy();
 	void _rebuild_shadow_proxy();
 	void _sync_shadow_proxy_instance();
 	void _sync_voxel_forward_volume(bool p_remove = false);
@@ -95,6 +101,7 @@ private:
 protected:
 	static void _bind_methods();
 	void _notification(int p_what);
+	void _validate_property(PropertyInfo &p_property) const;
 
 public:
 	void set_voxel_data(const Ref<VoxelShapeData> &p_data);
@@ -119,7 +126,9 @@ public:
 	void set_streaming_resident(bool p_resident);
 	bool is_streaming_resident() const;
 	// Internal renderer service used by VoxelVolumeStreamingManager.
-	void update_neighbor_faces(VoxelVolume3D *const p_neighbors[NEIGHBOR_FACE_COUNT]);
+	static int get_neighbor_diagonal_index(const Vector3i &p_offset);
+	static Vector3i get_neighbor_diagonal_offset(int p_index);
+	void update_neighbor_faces(VoxelVolume3D *const p_neighbors[NEIGHBOR_FACE_COUNT], VoxelVolume3D *const p_diagonal_neighbors[NEIGHBOR_DIAGONAL_COUNT]);
 
 	AABB get_aabb() const override;
 

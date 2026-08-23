@@ -42,6 +42,10 @@
 #include "servers/physics_3d/physics_server_3d.h"
 #include "servers/physics_3d/physics_server_3d_wrap_mt.h"
 
+#ifdef TOOLS_ENABLED
+#include "editor/voxel_volume_3d_editor_plugin.h"
+#endif
+
 static PhysicsServer3D *_create_voxel_physics_3d_callback() {
 #ifdef THREADS_ENABLED
 	bool using_threads = GLOBAL_GET("physics/3d/run_on_separate_thread");
@@ -65,6 +69,8 @@ void initialize_voxel_physics_3d_module(ModuleInitializationLevel p_level) {
 		GLOBAL_DEF("rendering/voxel_volume/max_resident_volumes", 256);
 		GLOBAL_DEF("rendering/voxel_volume/max_loads_per_frame", 8);
 		GLOBAL_DEF("rendering/voxel_volume/streaming_distance", 512.0);
+		GLOBAL_DEF("rendering/voxel_volume/streaming_hysteresis", 8.0);
+		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_volume/streaming_hysteresis", PROPERTY_HINT_RANGE, "0,256,0.5,or_greater,suffix:m"));
 		// The native RD visibility pass is deliberately opt-in until its output
 		// matches the established DDA path for multi-volume boundaries.
 		GLOBAL_DEF("rendering/voxel_forward/experimental_custom_visibility", false);
@@ -159,21 +165,18 @@ void initialize_voxel_physics_3d_module(ModuleInitializationLevel p_level) {
 		// volume sets. Keep it as an opt-in Forward+ fallback while Voxel Forward
 		// owns voxel visibility and shadows directly.
 		GLOBAL_DEF("rendering/voxel_volume/shadow_proxy/enabled", false);
-		GLOBAL_DEF("rendering/voxel_volume/occupancy_shadows/enabled", false);
-		GLOBAL_DEF("rendering/voxel_volume/occupancy_shadows/resolution", 128);
-		GLOBAL_DEF("rendering/voxel_volume/occupancy_shadows/voxel_size", 0.1);
-		GLOBAL_DEF("rendering/voxel_volume/occupancy_shadows/coarse_scale", 4);
-		GLOBAL_DEF("rendering/voxel_volume/occupancy_shadows/fine_distance", 2.0);
-		GLOBAL_DEF("rendering/voxel_volume/occupancy_shadows/max_distance", 24.0);
-		GLOBAL_DEF("rendering/voxel_volume/occupancy_shadows/bias", 0.003);
-		GLOBAL_DEF("rendering/voxel_volume/occupancy_shadows/max_steps", 128);
-		GLOBAL_DEF("rendering/voxel_volume/occupancy_shadows/update_frames", 4);
 		ClassDB::register_class<VoxelShapeData>();
 		ClassDB::register_class<VoxelShape3D>();
 		ClassDB::register_class<VoxelMaterial>();
 		ClassDB::register_class<VoxelVolume3D>();
 		voxel_volume_streaming_manager = memnew(VoxelVolumeStreamingManager);
 	}
+
+#ifdef TOOLS_ENABLED
+	if (p_level == MODULE_INITIALIZATION_LEVEL_EDITOR) {
+		EditorPlugins::add_by_type<VoxelVolume3DEditorPlugin>();
+	}
+#endif
 }
 
 void uninitialize_voxel_physics_3d_module(ModuleInitializationLevel p_level) {
