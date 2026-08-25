@@ -2,6 +2,8 @@
 
 #version 450
 
+#extension GL_EXT_nonuniform_qualifier : require
+
 #VERSION_DEFINES
 
 /* Include half precision types. */
@@ -499,6 +501,7 @@ void vertex_shader(vec3 vertex_input,
 #endif
 
 #ifdef MODE_RENDER_DEPTH
+#define VOXEL_DEPTH_PASS true
 
 #ifdef MODE_DUAL_PARABOLOID
 
@@ -773,6 +776,7 @@ void main() {
 	}
 
 	instance_index_interp = instance_index;
+	voxel_current_instance_index = instance_index;
 
 #ifdef MOTION_VECTORS
 	// Previous vertex.
@@ -863,6 +867,8 @@ void main() {
 #[fragment]
 
 #version 450
+
+#extension GL_EXT_nonuniform_qualifier : require
 
 #VERSION_DEFINES
 
@@ -1035,6 +1041,7 @@ layout(set = MATERIAL_UNIFORM_SET, binding = 0, std140) uniform MaterialUniforms
 #GLOBALS
 
 #ifdef MODE_RENDER_DEPTH
+#define VOXEL_DEPTH_PASS true
 
 #ifdef MODE_RENDER_MATERIAL
 
@@ -1054,7 +1061,28 @@ layout(location = 1) out uvec2 voxel_gi_buffer;
 #endif
 
 #endif //MODE_RENDER_NORMAL
+#ifdef MODE_RENDER_VOXEL_HIT
+#ifdef MODE_RENDER_NORMAL_ROUGHNESS
+#ifdef MODE_RENDER_VOXEL_GI
+layout(location = 2) out uint voxel_hit_output_buffer;
+#ifdef VOXEL_HIT_POSITION_BUFFER_ENABLED
+layout(location = 3) out vec4 voxel_hit_position_output_buffer;
+#endif
+#else
+layout(location = 1) out uint voxel_hit_output_buffer;
+#ifdef VOXEL_HIT_POSITION_BUFFER_ENABLED
+layout(location = 2) out vec4 voxel_hit_position_output_buffer;
+#endif
+#endif
+#else
+layout(location = 0) out uint voxel_hit_output_buffer;
+#ifdef VOXEL_HIT_POSITION_BUFFER_ENABLED
+layout(location = 1) out vec4 voxel_hit_position_output_buffer;
+#endif
+#endif
+#endif
 #else // RENDER DEPTH
+#define VOXEL_DEPTH_PASS false
 
 #ifdef MODE_SEPARATE_SPECULAR
 
@@ -1351,6 +1379,7 @@ vec3 encode24(vec3 v) {
 
 void fragment_shader(in SceneData scene_data) {
 	uint instance_index = instance_index_interp;
+	voxel_current_instance_index = instance_index;
 
 #ifdef PREMUL_ALPHA_USED
 	float premul_alpha = 1.0;
@@ -1476,10 +1505,50 @@ void fragment_shader(in SceneData scene_data) {
 #ifdef VOXEL_OCCUPANCY_SHADOWS_USED
 	bool voxel_occupancy_shadows = false;
 #endif
+#ifdef VOXEL_HIT_PAYLOAD_USED
+	uint voxel_hit_payload = 0u;
+#ifndef MODE_RENDER_DEPTH
+#ifdef USE_MULTIVIEW
+	voxel_hit_payload = texelFetch(usampler2DArray(voxel_hit_buffer, SAMPLER_NEAREST_CLAMP), ivec3(ivec2(gl_FragCoord.xy), int(ViewIndex)), 0).r;
+#else
+	voxel_hit_payload = texelFetch(usampler2D(voxel_hit_buffer, SAMPLER_NEAREST_CLAMP), ivec2(gl_FragCoord.xy), 0).r;
+#endif
+#endif
+#endif
+
+#ifdef VOXEL_HIT_DEPTH_USED
+	float voxel_hit_depth = 0.0;
+#ifndef MODE_RENDER_DEPTH
+#ifdef USE_MULTIVIEW
+	voxel_hit_depth = texelFetch(sampler2DArray(voxel_hit_depth_buffer, SAMPLER_NEAREST_CLAMP), ivec3(ivec2(gl_FragCoord.xy), int(ViewIndex)), 0).r;
+#else
+	voxel_hit_depth = texelFetch(sampler2D(voxel_hit_depth_buffer, SAMPLER_NEAREST_CLAMP), ivec2(gl_FragCoord.xy), 0).r;
+#endif
+#endif
+#endif
+
+#if defined(VOXEL_HIT_POSITION_BUFFER_ENABLED) && defined(VOXEL_HIT_POSITION_USED)
+	vec4 voxel_hit_position_data = vec4(0.0);
+#ifndef MODE_RENDER_DEPTH
+#ifdef USE_MULTIVIEW
+	voxel_hit_position_data = texelFetch(sampler2DArray(voxel_hit_position_buffer, SAMPLER_NEAREST_CLAMP), ivec3(ivec2(gl_FragCoord.xy), int(ViewIndex)), 0);
+#else
+	voxel_hit_position_data = texelFetch(sampler2D(voxel_hit_position_buffer, SAMPLER_NEAREST_CLAMP), ivec2(gl_FragCoord.xy), 0);
+#endif
+#endif
+#endif
 
 	mat3 model_normal_matrix;
 	if (bool(instances.data[instance_index].flags & INSTANCE_FLAGS_NON_UNIFORM_SCALE)) {
+#ifdef VOXEL_INV_MODEL_MATRIX_USED
+		// inverse_transform stores affine matrix rows as vec4 columns. Its three
+		// basis rows are therefore already the inverse-transpose basis columns.
+		model_normal_matrix = mat3(instances.data[instance_index].inverse_transform[0].xyz,
+				instances.data[instance_index].inverse_transform[1].xyz,
+				instances.data[instance_index].inverse_transform[2].xyz);
+#else
 		model_normal_matrix = transpose(inverse(mat3(read_model_matrix)));
+#endif
 	} else {
 		model_normal_matrix = mat3(read_model_matrix);
 	}
@@ -1504,8 +1573,29 @@ void fragment_shader(in SceneData scene_data) {
 #endif
 
 	{
+#ifdef VOXEL_INV_MODEL_MATRIX_USED
+	mat4 read_inverse_model_matrix = transpose(mat4(instances.data[instance_index].inverse_transform[0],
+			instances.data[instance_index].inverse_transform[1],
+			instances.data[instance_index].inverse_transform[2],
+			vec4(0.0, 0.0, 0.0, 1.0)));
+#endif
 #CODE : FRAGMENT
 	}
+
+#if defined(MODE_RENDER_DEPTH) && defined(MODE_RENDER_VOXEL_HIT)
+#ifdef VOXEL_HIT_PAYLOAD_USED
+	voxel_hit_output_buffer = voxel_hit_payload;
+#else
+	voxel_hit_output_buffer = 0u;
+#endif
+#ifdef VOXEL_HIT_POSITION_BUFFER_ENABLED
+#ifdef VOXEL_HIT_POSITION_USED
+	voxel_hit_position_output_buffer = voxel_hit_position_data;
+#else
+	voxel_hit_position_output_buffer = vec4(0.0);
+#endif
+#endif
+#endif
 
 	float roughness = roughness_highp;
 	float metallic = metallic_highp;

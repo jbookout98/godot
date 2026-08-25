@@ -84,6 +84,24 @@ void RenderForwardClustered::RenderBufferDataForwardClustered::ensure_voxelgi() 
 	}
 }
 
+void RenderForwardClustered::RenderBufferDataForwardClustered::ensure_voxel_hit_texture() {
+	ERR_FAIL_NULL(render_buffers);
+	if (!voxel_hit_buffer_enabled || render_buffers->has_texture(RB_SCOPE_FORWARD_CLUSTERED, RB_TEX_VOXEL_HIT)) {
+		return;
+	}
+	const bool msaa = render_buffers->get_msaa_3d() != RSE::VIEWPORT_MSAA_DISABLED;
+	render_buffers->create_texture(RB_SCOPE_FORWARD_CLUSTERED, RB_TEX_VOXEL_HIT, get_voxel_hit_format(), get_voxel_hit_usage_bits(msaa, false, render_buffers->get_can_be_storage()));
+	if (voxel_hit_position_buffer_enabled) {
+		render_buffers->create_texture(RB_SCOPE_FORWARD_CLUSTERED, RB_TEX_VOXEL_HIT_POSITION, get_voxel_hit_position_format(), get_voxel_hit_usage_bits(msaa, false, render_buffers->get_can_be_storage()));
+	}
+	if (msaa) {
+		render_buffers->create_texture(RB_SCOPE_FORWARD_CLUSTERED, RB_TEX_VOXEL_HIT_MSAA, get_voxel_hit_format(), get_voxel_hit_usage_bits(false, true, render_buffers->get_can_be_storage()), render_buffers->get_texture_samples());
+		if (voxel_hit_position_buffer_enabled) {
+			render_buffers->create_texture(RB_SCOPE_FORWARD_CLUSTERED, RB_TEX_VOXEL_HIT_POSITION_MSAA, get_voxel_hit_position_format(), get_voxel_hit_usage_bits(false, true, render_buffers->get_can_be_storage()), render_buffers->get_texture_samples());
+		}
+	}
+}
+
 void RenderForwardClustered::RenderBufferDataForwardClustered::ensure_fsr2(RendererRD::FSR2Effect *p_effect) {
 	if (fsr2_context == nullptr) {
 		fsr2_context = p_effect->create_context(render_buffers->get_internal_size(), render_buffers->get_target_size());
@@ -209,17 +227,26 @@ RID RenderForwardClustered::RenderBufferDataForwardClustered::get_depth_fb(Depth
 	bool use_msaa = render_buffers->get_msaa_3d() != RSE::VIEWPORT_MSAA_DISABLED;
 
 	RID depth = use_msaa ? render_buffers->get_texture(RB_SCOPE_BUFFERS, RB_TEX_DEPTH_MSAA) : render_buffers->get_depth_texture();
+	RID voxel_hit;
+	RID voxel_hit_position;
+	if (voxel_hit_buffer_enabled) {
+		ensure_voxel_hit_texture();
+		voxel_hit = render_buffers->get_texture(RB_SCOPE_FORWARD_CLUSTERED, use_msaa ? RB_TEX_VOXEL_HIT_MSAA : RB_TEX_VOXEL_HIT);
+		if (voxel_hit_position_buffer_enabled) {
+			voxel_hit_position = render_buffers->get_texture(RB_SCOPE_FORWARD_CLUSTERED, use_msaa ? RB_TEX_VOXEL_HIT_POSITION_MSAA : RB_TEX_VOXEL_HIT_POSITION);
+		}
+	}
 
 	switch (p_type) {
 		case DEPTH_FB: {
-			return FramebufferCacheRD::get_singleton()->get_cache_multiview(render_buffers->get_view_count(), depth);
+			return voxel_hit_buffer_enabled ? (voxel_hit_position_buffer_enabled ? FramebufferCacheRD::get_singleton()->get_cache_multiview(render_buffers->get_view_count(), depth, voxel_hit, voxel_hit_position) : FramebufferCacheRD::get_singleton()->get_cache_multiview(render_buffers->get_view_count(), depth, voxel_hit)) : FramebufferCacheRD::get_singleton()->get_cache_multiview(render_buffers->get_view_count(), depth);
 		} break;
 		case DEPTH_FB_ROUGHNESS: {
 			ensure_normal_roughness_texture();
 
 			RID normal_roughness_buffer = render_buffers->get_texture(RB_SCOPE_FORWARD_CLUSTERED, use_msaa ? RB_TEX_NORMAL_ROUGHNESS_MSAA : RB_TEX_NORMAL_ROUGHNESS);
 
-			return FramebufferCacheRD::get_singleton()->get_cache_multiview(render_buffers->get_view_count(), depth, normal_roughness_buffer);
+			return voxel_hit_buffer_enabled ? (voxel_hit_position_buffer_enabled ? FramebufferCacheRD::get_singleton()->get_cache_multiview(render_buffers->get_view_count(), depth, normal_roughness_buffer, voxel_hit, voxel_hit_position) : FramebufferCacheRD::get_singleton()->get_cache_multiview(render_buffers->get_view_count(), depth, normal_roughness_buffer, voxel_hit)) : FramebufferCacheRD::get_singleton()->get_cache_multiview(render_buffers->get_view_count(), depth, normal_roughness_buffer);
 		} break;
 		case DEPTH_FB_ROUGHNESS_VOXELGI: {
 			ensure_normal_roughness_texture();
@@ -228,7 +255,7 @@ RID RenderForwardClustered::RenderBufferDataForwardClustered::get_depth_fb(Depth
 			RID normal_roughness_buffer = render_buffers->get_texture(RB_SCOPE_FORWARD_CLUSTERED, use_msaa ? RB_TEX_NORMAL_ROUGHNESS_MSAA : RB_TEX_NORMAL_ROUGHNESS);
 			RID voxelgi_buffer = render_buffers->get_texture(RB_SCOPE_FORWARD_CLUSTERED, use_msaa ? RB_TEX_VOXEL_GI_MSAA : RB_TEX_VOXEL_GI);
 
-			return FramebufferCacheRD::get_singleton()->get_cache_multiview(render_buffers->get_view_count(), depth, normal_roughness_buffer, voxelgi_buffer);
+			return voxel_hit_buffer_enabled ? (voxel_hit_position_buffer_enabled ? FramebufferCacheRD::get_singleton()->get_cache_multiview(render_buffers->get_view_count(), depth, normal_roughness_buffer, voxelgi_buffer, voxel_hit, voxel_hit_position) : FramebufferCacheRD::get_singleton()->get_cache_multiview(render_buffers->get_view_count(), depth, normal_roughness_buffer, voxelgi_buffer, voxel_hit)) : FramebufferCacheRD::get_singleton()->get_cache_multiview(render_buffers->get_view_count(), depth, normal_roughness_buffer, voxelgi_buffer);
 		} break;
 		default: {
 			ERR_FAIL_V(RID());
@@ -276,9 +303,23 @@ uint32_t RenderForwardClustered::RenderBufferDataForwardClustered::get_voxelgi_u
 	return RenderSceneBuffersRD::get_color_usage_bits(p_resolve, p_msaa, p_storage);
 }
 
+RD::DataFormat RenderForwardClustered::RenderBufferDataForwardClustered::get_voxel_hit_format() {
+	return RD::DATA_FORMAT_R32_UINT;
+}
+
+RD::DataFormat RenderForwardClustered::RenderBufferDataForwardClustered::get_voxel_hit_position_format() {
+	return RD::DATA_FORMAT_R32G32B32A32_SFLOAT;
+}
+
+uint32_t RenderForwardClustered::RenderBufferDataForwardClustered::get_voxel_hit_usage_bits(bool p_resolve, bool p_msaa, bool p_storage) {
+	return RenderSceneBuffersRD::get_color_usage_bits(p_resolve, p_msaa, p_storage);
+}
+
 void RenderForwardClustered::setup_render_buffer_data(Ref<RenderSceneBuffersRD> p_render_buffers) {
 	Ref<RenderBufferDataForwardClustered> data;
 	data.instantiate();
+	data->set_voxel_hit_buffer_enabled(voxel_hit_buffer_enabled);
+	data->set_voxel_hit_position_buffer_enabled(voxel_hit_position_buffer_enabled);
 	p_render_buffers->set_custom_data(RB_SCOPE_FORWARD_CLUSTERED, data);
 
 	Ref<RendererRD::GI::RenderBuffersGI> rbgi;
@@ -469,19 +510,27 @@ void RenderForwardClustered::_render_list_template(RenderingDevice::DrawListID p
 
 				pipeline_key.version = SceneShaderForwardClustered::PIPELINE_VERSION_COLOR_PASS;
 			} break;
-			case PASS_MODE_SHADOW:
-			case PASS_MODE_DEPTH: {
+			case PASS_MODE_SHADOW: {
 				pipeline_key.version = p_params->view_count > 1 ? SceneShaderForwardClustered::PIPELINE_VERSION_DEPTH_PASS_MULTIVIEW : SceneShaderForwardClustered::PIPELINE_VERSION_DEPTH_PASS;
+			} break;
+			case PASS_MODE_DEPTH: {
+				pipeline_key.version = voxel_hit_buffer_enabled ?
+						(p_params->view_count > 1 ? SceneShaderForwardClustered::PIPELINE_VERSION_VOXEL_HIT_DEPTH_PASS_MULTIVIEW : SceneShaderForwardClustered::PIPELINE_VERSION_VOXEL_HIT_DEPTH_PASS) :
+						(p_params->view_count > 1 ? SceneShaderForwardClustered::PIPELINE_VERSION_DEPTH_PASS_MULTIVIEW : SceneShaderForwardClustered::PIPELINE_VERSION_DEPTH_PASS);
 			} break;
 			case PASS_MODE_SHADOW_DP: {
 				ERR_FAIL_COND_MSG(p_params->view_count > 1, "Multiview not supported for shadow DP pass");
 				pipeline_key.version = SceneShaderForwardClustered::PIPELINE_VERSION_DEPTH_PASS_DP;
 			} break;
 			case PASS_MODE_DEPTH_NORMAL_ROUGHNESS: {
-				pipeline_key.version = p_params->view_count > 1 ? SceneShaderForwardClustered::PIPELINE_VERSION_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_MULTIVIEW : SceneShaderForwardClustered::PIPELINE_VERSION_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS;
+				pipeline_key.version = voxel_hit_buffer_enabled ?
+						(p_params->view_count > 1 ? SceneShaderForwardClustered::PIPELINE_VERSION_VOXEL_HIT_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_MULTIVIEW : SceneShaderForwardClustered::PIPELINE_VERSION_VOXEL_HIT_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS) :
+						(p_params->view_count > 1 ? SceneShaderForwardClustered::PIPELINE_VERSION_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_MULTIVIEW : SceneShaderForwardClustered::PIPELINE_VERSION_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS);
 			} break;
 			case PASS_MODE_DEPTH_NORMAL_ROUGHNESS_VOXEL_GI: {
-				pipeline_key.version = p_params->view_count > 1 ? SceneShaderForwardClustered::PIPELINE_VERSION_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI_MULTIVIEW : SceneShaderForwardClustered::PIPELINE_VERSION_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI;
+				pipeline_key.version = voxel_hit_buffer_enabled ?
+						(p_params->view_count > 1 ? SceneShaderForwardClustered::PIPELINE_VERSION_VOXEL_HIT_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI_MULTIVIEW : SceneShaderForwardClustered::PIPELINE_VERSION_VOXEL_HIT_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI) :
+						(p_params->view_count > 1 ? SceneShaderForwardClustered::PIPELINE_VERSION_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI_MULTIVIEW : SceneShaderForwardClustered::PIPELINE_VERSION_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI);
 			} break;
 			case PASS_MODE_DEPTH_MATERIAL: {
 				ERR_FAIL_COND_MSG(p_params->view_count > 1, "Multiview not supported for material pass");
@@ -814,6 +863,15 @@ void RenderForwardClustered::SceneState::grow_instance_buffer(RenderListType p_r
 	}
 }
 
+static Transform3D _transform_from_instance_data_3x4(const float *p_transform) {
+	Transform3D transform;
+	transform.basis.rows[0] = Vector3(p_transform[0], p_transform[1], p_transform[2]);
+	transform.basis.rows[1] = Vector3(p_transform[4], p_transform[5], p_transform[6]);
+	transform.basis.rows[2] = Vector3(p_transform[8], p_transform[9], p_transform[10]);
+	transform.origin = Vector3(p_transform[3], p_transform[7], p_transform[11]);
+	return transform;
+}
+
 void RenderForwardClustered::_fill_instance_data(RenderListType p_render_list, int *p_render_info, uint32_t p_offset, int32_t p_max_elements, bool p_update_buffer) {
 	RenderList *rl = &render_list[p_render_list];
 	uint32_t element_total = p_max_elements >= 0 ? uint32_t(p_max_elements) : rl->elements.size();
@@ -836,11 +894,36 @@ void RenderForwardClustered::_fill_instance_data(RenderListType p_render_list, i
 
 	uint32_t repeats = 0;
 	GeometryInstanceSurfaceDataCache *prev_surface = nullptr;
+	const bool collect_voxel_batch_diagnostics = p_render_list == RENDER_LIST_OPAQUE && p_offset == 0u;
+	uint32_t voxel_visible = 0;
+	uint32_t voxel_groups = 0;
+	uint32_t voxel_draws = 0;
+	uint32_t voxel_batched_instances = 0;
+	uint32_t voxel_unbatched = 0;
+	uint32_t voxel_reject_key = 0;
+	uint32_t voxel_reject_mirror = 0;
+	uint32_t voxel_reject_instance_mode = 0;
+	uint32_t voxel_reject_repeat_cap = 0;
+	uint32_t voxel_group_size = 0;
+	auto close_voxel_group = [&]() {
+		if (voxel_group_size == 0) {
+			return;
+		}
+		voxel_groups++;
+		voxel_draws++;
+		if (voxel_group_size == 1) {
+			voxel_unbatched++;
+		} else {
+			voxel_batched_instances += voxel_group_size - 1u;
+		}
+		voxel_group_size = 0;
+	};
 	for (uint32_t i = 0; i < element_total; i++) {
 		GeometryInstanceSurfaceDataCache *surface = rl->elements[i + p_offset];
 		GeometryInstanceForwardClustered *inst = surface->owner;
 
-		SceneState::InstanceData instance_data;
+		SceneState::InstanceData instance_data = {};
+		RendererRD::MaterialStorage::store_transform_transposed_3x4(Transform3D(), instance_data.inverse_transform);
 
 		if (likely(inst->store_transform_cache)) {
 			RendererRD::MaterialStorage::store_transform_transposed_3x4(inst->transform, instance_data.transform);
@@ -856,6 +939,13 @@ void RenderForwardClustered::_fill_instance_data(RenderListType p_render_list, i
 			RendererRD::MaterialStorage::split_double(inst->prev_transform.origin.y, &instance_data.prev_transform[7], &instance_data.prev_model_precision[1]);
 			RendererRD::MaterialStorage::split_double(inst->prev_transform.origin.z, &instance_data.prev_transform[11], &instance_data.prev_model_precision[2]);
 #endif
+			if (surface->shader != nullptr && surface->shader->uses_voxel_inverse_model_matrix) {
+				// Invert the same float-quantized matrix reconstructed by the shader.
+				// This keeps float and double builds consistent with the former
+				// per-fragment inverse(MODEL_MATRIX) input.
+				const Transform3D shader_model_transform = _transform_from_instance_data_3x4(instance_data.transform);
+				RendererRD::MaterialStorage::store_transform_transposed_3x4(shader_model_transform.affine_inverse(), instance_data.inverse_transform);
+			}
 		} else {
 			RendererRD::MaterialStorage::store_transform_transposed_3x4(Transform3D(), instance_data.transform);
 			RendererRD::MaterialStorage::store_transform_transposed_3x4(Transform3D(), instance_data.prev_transform);
@@ -870,6 +960,7 @@ void RenderForwardClustered::_fill_instance_data(RenderListType p_render_list, i
 		instance_data.layer_mask = inst->layer_mask;
 		instance_data.instance_uniforms_ofs = uint32_t(inst->shader_uniforms_offset);
 		instance_data.set_lightmap_uv_scale(inst->lightmap_uv_scale);
+		_fill_voxel_instance_data(inst->data->base, instance_data.voxel);
 
 		AABB surface_aabb = AABB(Vector3(0.0, 0.0, 0.0), Vector3(1.0, 1.0, 1.0));
 		uint64_t format = RendererRD::MeshStorage::get_singleton()->mesh_surface_get_format(surface->surface);
@@ -887,7 +978,35 @@ void RenderForwardClustered::_fill_instance_data(RenderListType p_render_list, i
 
 		const bool cant_repeat = instance_data.flags & INSTANCE_DATA_FLAG_MULTIMESH || inst->mesh_instance.is_valid();
 
-		if (prev_surface != nullptr && !cant_repeat && prev_surface->sort.sort_key1 == surface->sort.sort_key1 && prev_surface->sort.sort_key2 == surface->sort.sort_key2 && inst->mirror == prev_surface->owner->mirror && repeats < RenderElementInfo::MAX_REPEATS) {
+		const bool can_repeat = prev_surface != nullptr && !cant_repeat && prev_surface->sort.sort_key1 == surface->sort.sort_key1 && prev_surface->sort.sort_key2 == surface->sort.sort_key2 && inst->mirror == prev_surface->owner->mirror && repeats < RenderElementInfo::MAX_REPEATS;
+		if (collect_voxel_batch_diagnostics) {
+			const bool is_voxel = surface->shader != nullptr && surface->shader->uses_voxel_batched_resources;
+			const bool previous_is_voxel = prev_surface != nullptr && prev_surface->shader != nullptr && prev_surface->shader->uses_voxel_batched_resources;
+			if (is_voxel) {
+				voxel_visible++;
+				if (can_repeat && previous_is_voxel) {
+					voxel_group_size++;
+				} else {
+					close_voxel_group();
+					voxel_group_size = 1;
+					if (previous_is_voxel) {
+						if (cant_repeat) {
+							voxel_reject_instance_mode++;
+						} else if (prev_surface->sort.sort_key1 != surface->sort.sort_key1 || prev_surface->sort.sort_key2 != surface->sort.sort_key2) {
+							voxel_reject_key++;
+						} else if (inst->mirror != prev_surface->owner->mirror) {
+							voxel_reject_mirror++;
+						} else if (repeats >= RenderElementInfo::MAX_REPEATS) {
+							voxel_reject_repeat_cap++;
+						}
+					}
+				}
+			} else {
+				close_voxel_group();
+			}
+		}
+
+		if (can_repeat) {
 			//this element is the same as the previous one, count repeats to draw it using instancing
 			repeats++;
 		} else {
@@ -916,6 +1035,26 @@ void RenderForwardClustered::_fill_instance_data(RenderListType p_render_list, i
 	if (repeats > 0) {
 		for (uint32_t j = 1; j <= repeats; j++) {
 			rl->element_info[p_offset + element_total - j].repeat = j;
+		}
+	}
+
+	if (collect_voxel_batch_diagnostics) {
+		close_voxel_group();
+		if (last_voxel_batch_visible != voxel_visible || last_voxel_batch_groups != voxel_groups || last_voxel_batch_draws != voxel_draws ||
+				last_voxel_batch_instances != voxel_batched_instances || last_voxel_batch_unbatched != voxel_unbatched ||
+				last_voxel_batch_reject_key != voxel_reject_key || last_voxel_batch_reject_mirror != voxel_reject_mirror ||
+				last_voxel_batch_reject_instance_mode != voxel_reject_instance_mode || last_voxel_batch_reject_repeat_cap != voxel_reject_repeat_cap) {
+			print_verbose(vformat("Voxel proxy batching: %d visible, %d compatible groups, %d proxy draws, %d batched instances, %d unbatched; rejected by key=%d mirror=%d instance-mode=%d repeat-cap=%d",
+					voxel_visible, voxel_groups, voxel_draws, voxel_batched_instances, voxel_unbatched, voxel_reject_key, voxel_reject_mirror, voxel_reject_instance_mode, voxel_reject_repeat_cap));
+			last_voxel_batch_visible = voxel_visible;
+			last_voxel_batch_groups = voxel_groups;
+			last_voxel_batch_draws = voxel_draws;
+			last_voxel_batch_instances = voxel_batched_instances;
+			last_voxel_batch_unbatched = voxel_unbatched;
+			last_voxel_batch_reject_key = voxel_reject_key;
+			last_voxel_batch_reject_mirror = voxel_reject_mirror;
+			last_voxel_batch_reject_instance_mode = voxel_reject_instance_mode;
+			last_voxel_batch_reject_repeat_cap = voxel_reject_repeat_cap;
 		}
 	}
 
@@ -1966,6 +2105,15 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			default: {
 			};
 		}
+		if (voxel_hit_buffer_enabled) {
+			// The ownership payload is the last color attachment in every depth
+			// prepass layout, followed by the exact local voxel hit position.
+			// Zero means that a conventional mesh owns the depth.
+			depth_pass_clear.push_back(Color(0, 0, 0, 0));
+			if (voxel_hit_position_buffer_enabled) {
+				depth_pass_clear.push_back(Color(0, 0, 0, 0));
+			}
+		}
 	}
 
 	bool using_sss = rb_data.is_valid() && !is_reflection_probe && scene_state.used_sss && ss_effects->sss_get_quality() != RSE::SUB_SURFACE_SCATTERING_QUALITY_DISABLED;
@@ -2120,7 +2268,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 
 	bool debug_voxelgis = get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_VOXEL_GI_ALBEDO || get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_VOXEL_GI_LIGHTING || get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_VOXEL_GI_EMISSION;
 	bool debug_sdfgi_probes = get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_SDFGI_PROBES;
-	bool force_depth_pre_pass = scene_state.used_opaque_stencil;
+	bool force_depth_pre_pass = scene_state.used_opaque_stencil || voxel_hit_buffer_enabled;
 	bool depth_pre_pass = (force_depth_pre_pass || bool(GLOBAL_GET_CACHED(bool, "rendering/driver/depth_prepass/enable"))) && depth_framebuffer.is_valid();
 
 	SceneShaderForwardClustered::ShaderSpecialization base_specialization = scene_shader.default_specialization;
@@ -2130,7 +2278,9 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 
 	if (depth_pre_pass) { //depth pre pass
 		bool needs_pre_resolve = _needs_post_prepass_render(p_render_data, using_sdfgi || using_voxelgi);
-		if (needs_pre_resolve) {
+		if (voxel_hit_buffer_enabled) {
+			RENDER_TIMESTAMP("Voxel Hit Depth DDA");
+		} else if (needs_pre_resolve) {
 			RENDER_TIMESTAMP("GI + Render Depth Pre-Pass (Parallel)");
 		} else {
 			RENDER_TIMESTAMP("Render Depth Pre-Pass");
@@ -2143,11 +2293,15 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			_post_prepass_render(p_render_data, using_sdfgi || using_voxelgi);
 		}
 
-		RD::get_singleton()->draw_command_begin_label("Render Depth Pre-Pass");
+		if (voxel_hit_buffer_enabled) {
+			RD::get_singleton()->draw_command_begin_label("Voxel Hit Depth DDA");
+		} else {
+			RD::get_singleton()->draw_command_begin_label("Render Depth Pre-Pass");
+		}
 
 		RID rp_uniform_set = _setup_render_pass_uniform_set(RENDER_LIST_OPAQUE, nullptr, RID(), samplers, depth_prepass_uniform_buffer_index);
 
-		bool finish_depth = using_ssao || using_ssil || using_sdfgi || using_voxelgi || ce_pre_opaque_resolved_depth || ce_post_opaque_resolved_depth || _render_scene_custom_uses_resolved_depth();
+		bool finish_depth = voxel_hit_buffer_enabled || using_ssao || using_ssil || using_sdfgi || using_voxelgi || ce_pre_opaque_resolved_depth || ce_post_opaque_resolved_depth || _render_scene_custom_uses_resolved_depth();
 		RenderListParameters render_list_params(render_list[RENDER_LIST_OPAQUE].elements.ptr(), render_list[RENDER_LIST_OPAQUE].element_info.ptr(), render_list[RENDER_LIST_OPAQUE].elements.size(), reverse_cull, depth_pass_mode, 0, rb_data.is_null(), p_render_data->directional_light_soft_shadows, rp_uniform_set, get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_WIREFRAME, Vector2(), p_render_data->scene_data->lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, p_render_data->scene_data->view_count, 0, base_specialization);
 		_render_list_with_draw_list(&render_list_params, depth_framebuffer, RD::DrawFlags(needs_pre_resolve ? RD::DRAW_DEFAULT_ALL : RD::DRAW_CLEAR_ALL), depth_pass_clear, 0.0f, 0u, p_render_data->render_region);
 
@@ -2165,6 +2319,21 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 					resolve_effects->resolve_depth(rb->get_depth_msaa(v), rb->get_depth_texture(v), rb->get_internal_size(), texture_multisamples[msaa]);
 				}
 			}
+			RD::get_singleton()->draw_command_end_label();
+			if (voxel_hit_buffer_enabled && rb_data.is_valid() && rb_data->has_voxel_hit()) {
+				for (uint32_t v = 0; v < rb->get_view_count(); v++) {
+					RD::get_singleton()->texture_resolve_multisample(rb_data->get_voxel_hit_msaa(v), rb_data->get_voxel_hit(v));
+					if (voxel_hit_position_buffer_enabled) {
+						RD::get_singleton()->texture_resolve_multisample(rb_data->get_voxel_hit_position_msaa(v), rb_data->get_voxel_hit_position(v));
+					}
+				}
+			}
+		}
+		if (voxel_hit_buffer_enabled) {
+			RENDER_TIMESTAMP("Voxel Hit Depth Copy");
+			RD::get_singleton()->draw_command_begin_label("Voxel Hit Depth Copy");
+			_render_buffers_ensure_depth_texture(p_render_data);
+			_render_buffers_copy_depth_texture(p_render_data, false);
 			RD::get_singleton()->draw_command_end_label();
 		}
 	}
@@ -2197,9 +2366,17 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		base_specialization.cluster_has_area_light = current_cluster_builder->get_cluster_count_by_type(ClusterBuilderRD::ELEMENT_TYPE_AREA_LIGHT) != 0;
 	}
 
-	RENDER_TIMESTAMP("Render Opaque Pass");
+	if (voxel_hit_buffer_enabled) {
+		RENDER_TIMESTAMP("Voxel Opaque Material");
+	} else {
+		RENDER_TIMESTAMP("Render Opaque Pass");
+	}
 
-	RD::get_singleton()->draw_command_begin_label("Render Opaque Pass");
+	if (voxel_hit_buffer_enabled) {
+		RD::get_singleton()->draw_command_begin_label("Voxel Opaque Material");
+	} else {
+		RD::get_singleton()->draw_command_begin_label("Render Opaque Pass");
+	}
 
 	p_render_data->scene_data->directional_light_count = p_render_data->directional_light_count;
 	p_render_data->scene_data->opaque_prepass_threshold = 0.0f;
@@ -3217,6 +3394,16 @@ void RenderForwardClustered::_add_voxel_occupancy_uniforms(Vector<RD::Uniform> &
 	u.append_id(sdfgi_get_ubo());
 	r_uniforms.push_back(u);
 
+	const RID default_3d = RendererRD::TextureStorage::get_singleton()->texture_rd_get_default(RendererRD::TextureStorage::DEFAULT_RD_TEXTURE_3D_BLACK);
+	for (uint32_t binding = 24; binding <= 26; binding++) {
+		RD::Uniform texture_array;
+		texture_array.binding = binding;
+		texture_array.uniform_type = RD::UNIFORM_TYPE_TEXTURE;
+		for (uint32_t index = 0; index < 576; index++) {
+			texture_array.append_id(default_3d);
+		}
+		r_uniforms.push_back(texture_array);
+	}
 }
 
 void RenderForwardClustered::_update_render_base_uniform_set() {
@@ -3711,6 +3898,30 @@ RID RenderForwardClustered::_setup_render_pass_uniform_set(RenderListType p_rend
 		}
 		u.append_id(t);
 		uniforms.push_back(u);
+	}
+	if (voxel_hit_buffer_enabled) {
+		RD::Uniform u_hit;
+		u_hit.binding = 37;
+		u_hit.uniform_type = RD::UNIFORM_TYPE_TEXTURE;
+		RID hit_texture = rb_data.is_valid() && rb_data->has_voxel_hit() ? rb_data->get_voxel_hit() : texture_storage->texture_rd_get_default(RendererRD::TextureStorage::DEFAULT_RD_TEXTURE_2D_UINT);
+		u_hit.append_id(hit_texture);
+		uniforms.push_back(u_hit);
+
+		RD::Uniform u_depth;
+		u_depth.binding = 38;
+		u_depth.uniform_type = RD::UNIFORM_TYPE_TEXTURE;
+		RID hit_depth = rb.is_valid() && rb->has_texture(RB_SCOPE_BUFFERS, RB_TEX_BACK_DEPTH) ? rb->get_texture(RB_SCOPE_BUFFERS, RB_TEX_BACK_DEPTH) : texture_storage->texture_rd_get_default(is_multiview ? RendererRD::TextureStorage::DEFAULT_RD_TEXTURE_2D_ARRAY_DEPTH : RendererRD::TextureStorage::DEFAULT_RD_TEXTURE_DEPTH);
+		u_depth.append_id(hit_depth);
+		uniforms.push_back(u_depth);
+
+		if (voxel_hit_position_buffer_enabled) {
+			RD::Uniform u_position;
+			u_position.binding = 39;
+			u_position.uniform_type = RD::UNIFORM_TYPE_TEXTURE;
+			RID hit_position = rb_data.is_valid() && rb_data->has_voxel_hit_position() ? rb_data->get_voxel_hit_position() : texture_storage->texture_rd_get_default(is_multiview ? RendererRD::TextureStorage::DEFAULT_RD_TEXTURE_2D_ARRAY_BLACK : RendererRD::TextureStorage::DEFAULT_RD_TEXTURE_BLACK);
+			u_position.append_id(hit_position);
+			uniforms.push_back(u_position);
+		}
 	}
 	{
 		RD::Uniform u;
@@ -4304,7 +4515,11 @@ void RenderForwardClustered::_geometry_instance_add_surface_with_material(Geomet
 	sdcache->sort.material_id_hi = (p_material_id & 0xFF000000) >> 24;
 	sdcache->sort.material_id_lo = (p_material_id & 0x00FFFFFF);
 	sdcache->sort.shader_id = p_shader_id;
-	sdcache->sort.geometry_id = p_mesh.get_local_index(); //only meshes can repeat anyway
+	// Voxel proxy meshes contain the same synthesized 36-vertex cube and fetch
+	// their volume resources through the instance row. A shared geometry key lets
+	// the normal repeat path instance them even though each scene node retains a
+	// unique mesh RID for owner lookup, culling, editing, and selection.
+	sdcache->sort.geometry_id = p_material->shader_data->uses_voxel_batched_resources ? UINT32_MAX : p_mesh.get_local_index(); //only meshes can repeat anyway
 	sdcache->sort.uses_forward_gi = ginstance->can_sdfgi;
 	sdcache->sort.priority = p_material->priority;
 	sdcache->sort.uses_projector = ginstance->using_projectors;
@@ -5136,13 +5351,21 @@ void RenderForwardClustered::_update_shader_quality_settings() {
 	base_uniforms_changed(); //also need this
 }
 
-RenderForwardClustered::RenderForwardClustered() {
+RenderForwardClustered::RenderForwardClustered(bool p_voxel_hit_buffer_enabled, bool p_voxel_hit_position_buffer_enabled) {
 	singleton = this;
+	voxel_hit_buffer_enabled = p_voxel_hit_buffer_enabled;
+	voxel_hit_position_buffer_enabled = p_voxel_hit_buffer_enabled && p_voxel_hit_position_buffer_enabled;
 
 	/* SCENE SHADER */
 
 	{
 		String defines;
+		if (voxel_hit_buffer_enabled) {
+			defines += "\n#define VOXEL_HIT_BUFFER_ENABLED\n";
+		}
+		if (voxel_hit_position_buffer_enabled) {
+			defines += "\n#define VOXEL_HIT_POSITION_BUFFER_ENABLED\n";
+		}
 		defines += "\n#define MAX_ROUGHNESS_LOD " + itos(get_roughness_layers() - 1) + ".0\n";
 		if (is_using_radiance_octmap_array()) {
 			defines += "\n#define USE_RADIANCE_OCTMAP_ARRAY \n";

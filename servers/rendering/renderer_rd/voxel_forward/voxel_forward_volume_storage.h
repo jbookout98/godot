@@ -23,10 +23,16 @@ namespace RendererSceneRenderImplementation {
 // texture creation, and texture destruction retain command ordering.
 class VoxelForwardVolumeStorage {
 public:
+	// Fixed descriptor capacity, deliberately above the default 515-volume
+	// residency budget. Index zero is a normal usable slot.
+	static constexpr uint32_t MAX_BATCH_TEXTURES = 576;
+	static constexpr uint32_t INVALID_BATCH_TEXTURE_INDEX = UINT32_MAX;
+
 	struct Volume {
 		RID base;
 		RID voxel_texture;
 		RID brick_texture;
+		RID neighbor_texture;
 		RID palette_texture;
 		RID material_texture;
 		PackedByteArray occupancy_directory_cpu;
@@ -36,6 +42,9 @@ public:
 		Vector3i brick_dimensions;
 		Vector3i atlas_brick_dimensions;
 		uint32_t occupied_brick_count = 0;
+		uint32_t batch_texture_index = INVALID_BATCH_TEXTURE_INDEX;
+		uint32_t neighbor_mask = 0;
+		uint32_t neighbor_diagonal_mask = 0;
 		float voxel_size = 0.1f;
 		uint64_t revision = 0;
 	};
@@ -79,6 +88,11 @@ private:
 
 	static VoxelForwardVolumeStorage *singleton;
 	HashMap<RID, Volume> volumes;
+	Vector<RID> batch_voxel_textures;
+	Vector<RID> batch_brick_textures;
+	Vector<RID> batch_neighbor_textures;
+	Vector<uint32_t> free_batch_texture_indices;
+	uint64_t batch_texture_revision = 1;
 	WorldOccupancy world_occupancy;
 	uint64_t occupancy_gpu_bytes = 0;
 	uint64_t world_occupancy_gpu_bytes = 0;
@@ -104,14 +118,20 @@ private:
 public:
 	static VoxelForwardVolumeStorage *get_singleton() { return singleton; }
 
-	static void volume_set_on_render_thread(RID p_base, RID p_voxel_texture, RID p_brick_texture, RID p_palette_texture, RID p_material_texture, PackedByteArray p_occupancy_directory, PackedByteArray p_occupancy_bricks, Vector3i p_dimensions, Vector3i p_brick_dimensions, Vector3i p_atlas_brick_dimensions, Transform3D p_transform, float p_voxel_size, int p_occupied_brick_count, Vector3i p_dirty_position, Vector3i p_dirty_size, int64_t p_revision);
+	static void volume_set_on_render_thread(RID p_base, RID p_voxel_texture, RID p_brick_texture, RID p_neighbor_texture, RID p_palette_texture, RID p_material_texture, PackedByteArray p_occupancy_directory, PackedByteArray p_occupancy_bricks, Vector3i p_dimensions, Vector3i p_brick_dimensions, Vector3i p_atlas_brick_dimensions, Transform3D p_transform, float p_voxel_size, int p_occupied_brick_count, int p_neighbor_mask, int p_neighbor_diagonal_mask, Vector3i p_dirty_position, Vector3i p_dirty_size, int64_t p_revision);
 	static void volume_transform_set_on_render_thread(RID p_base, Transform3D p_transform);
+	static void volume_neighbors_set_on_render_thread(RID p_base, RID p_neighbor_texture, int p_neighbor_mask, int p_neighbor_diagonal_mask);
 	static void volume_remove_on_render_thread(RID p_base);
 	void update_world_occupancy(bool p_enabled);
 
 	const Volume *get_volume(RID p_base) const;
 	const HashMap<RID, Volume> &get_volumes() const { return volumes; }
 	const WorldOccupancy &get_world_occupancy() const { return world_occupancy; }
+	bool create_world_occupancy_snapshot(WorldOccupancy &r_snapshot) const;
+	const Vector<RID> &get_batch_voxel_textures() const { return batch_voxel_textures; }
+	const Vector<RID> &get_batch_brick_textures() const { return batch_brick_textures; }
+	const Vector<RID> &get_batch_neighbor_textures() const { return batch_neighbor_textures; }
+	uint64_t get_batch_texture_revision() const { return batch_texture_revision; }
 	uint32_t get_volume_count() const { return volumes.size(); }
 	uint64_t get_occupancy_gpu_bytes() const { return occupancy_gpu_bytes; }
 

@@ -52,6 +52,10 @@
 #define RB_TEX_SPECULAR_MSAA SNAME("specular_msaa")
 #define RB_TEX_NORMAL_ROUGHNESS SNAME("normal_roughness")
 #define RB_TEX_NORMAL_ROUGHNESS_MSAA SNAME("normal_roughness_msaa")
+#define RB_TEX_VOXEL_HIT SNAME("voxel_hit")
+#define RB_TEX_VOXEL_HIT_MSAA SNAME("voxel_hit_msaa")
+#define RB_TEX_VOXEL_HIT_POSITION SNAME("voxel_hit_position")
+#define RB_TEX_VOXEL_HIT_POSITION_MSAA SNAME("voxel_hit_position_msaa")
 #define RB_TEX_VOXEL_GI SNAME("voxel_gi")
 #define RB_TEX_VOXEL_GI_MSAA SNAME("voxel_gi_msaa")
 
@@ -88,6 +92,13 @@ class RenderForwardClustered : public RendererSceneRenderRD {
 	SceneShaderForwardClustered scene_shader;
 
 public:
+	struct VoxelInstanceData {
+		int32_t volume_dims_resource[4];
+		int32_t brick_dims_neighbor_mask[4];
+		int32_t atlas_dims_diagonal_mask[4];
+		float voxel_size_pad[4];
+	};
+
 	/* Framebuffer */
 
 	class RenderBufferDataForwardClustered : public RenderBufferCustomDataRD {
@@ -95,6 +106,8 @@ public:
 
 	private:
 		RenderSceneBuffersRD *render_buffers = nullptr;
+		bool voxel_hit_buffer_enabled = false;
+		bool voxel_hit_position_buffer_enabled = false;
 		RendererRD::FSR2Context *fsr2_context = nullptr;
 #ifdef METAL_MFXTEMPORAL_ENABLED
 		RendererRD::MFXTemporalContext *mfx_temporal_context = nullptr;
@@ -142,6 +155,18 @@ public:
 		RID get_voxelgi(uint32_t p_layer) { return render_buffers->get_texture_slice(RB_SCOPE_FORWARD_CLUSTERED, RB_TEX_VOXEL_GI, p_layer, 0); }
 		RID get_voxelgi_msaa(uint32_t p_layer) { return render_buffers->get_texture_slice(RB_SCOPE_FORWARD_CLUSTERED, RB_TEX_VOXEL_GI_MSAA, p_layer, 0); }
 
+		void set_voxel_hit_buffer_enabled(bool p_enabled) { voxel_hit_buffer_enabled = p_enabled; }
+		void set_voxel_hit_position_buffer_enabled(bool p_enabled) { voxel_hit_position_buffer_enabled = p_enabled; }
+		void ensure_voxel_hit_texture();
+		bool has_voxel_hit() const { return render_buffers->has_texture(RB_SCOPE_FORWARD_CLUSTERED, RB_TEX_VOXEL_HIT); }
+		RID get_voxel_hit() const { return render_buffers->get_texture(RB_SCOPE_FORWARD_CLUSTERED, RB_TEX_VOXEL_HIT); }
+		RID get_voxel_hit(uint32_t p_layer) { return render_buffers->get_texture_slice(RB_SCOPE_FORWARD_CLUSTERED, RB_TEX_VOXEL_HIT, p_layer, 0); }
+		RID get_voxel_hit_msaa(uint32_t p_layer) { return render_buffers->get_texture_slice(RB_SCOPE_FORWARD_CLUSTERED, RB_TEX_VOXEL_HIT_MSAA, p_layer, 0); }
+		bool has_voxel_hit_position() const { return render_buffers->has_texture(RB_SCOPE_FORWARD_CLUSTERED, RB_TEX_VOXEL_HIT_POSITION); }
+		RID get_voxel_hit_position() const { return render_buffers->get_texture(RB_SCOPE_FORWARD_CLUSTERED, RB_TEX_VOXEL_HIT_POSITION); }
+		RID get_voxel_hit_position(uint32_t p_layer) { return render_buffers->get_texture_slice(RB_SCOPE_FORWARD_CLUSTERED, RB_TEX_VOXEL_HIT_POSITION, p_layer, 0); }
+		RID get_voxel_hit_position_msaa(uint32_t p_layer) { return render_buffers->get_texture_slice(RB_SCOPE_FORWARD_CLUSTERED, RB_TEX_VOXEL_HIT_POSITION_MSAA, p_layer, 0); }
+
 		void ensure_fsr2(RendererRD::FSR2Effect *p_effect);
 		RendererRD::FSR2Context *get_fsr2_context() const { return fsr2_context; }
 
@@ -165,10 +190,15 @@ public:
 		static uint32_t get_normal_roughness_usage_bits(bool p_resolve, bool p_msaa, bool p_storage);
 		static RD::DataFormat get_voxelgi_format();
 		static uint32_t get_voxelgi_usage_bits(bool p_resolve, bool p_msaa, bool p_storage);
+		static RD::DataFormat get_voxel_hit_format();
+		static RD::DataFormat get_voxel_hit_position_format();
+		static uint32_t get_voxel_hit_usage_bits(bool p_resolve, bool p_msaa, bool p_storage);
 	};
 
 private:
 	virtual void setup_render_buffer_data(Ref<RenderSceneBuffersRD> p_render_buffers) override;
+	bool voxel_hit_buffer_enabled = false;
+	bool voxel_hit_position_buffer_enabled = false;
 
 	RID render_base_uniform_set;
 
@@ -333,6 +363,7 @@ private:
 
 		struct InstanceData {
 			float transform[12];
+			float inverse_transform[12];
 			float compressed_aabb_position[4];
 			float compressed_aabb_size[4];
 			float uv_scale[4];
@@ -342,6 +373,7 @@ private:
 			uint32_t layer_mask;
 			float prev_transform[12];
 			float lightmap_uv_scale[4];
+			VoxelInstanceData voxel;
 #ifdef REAL_T_IS_DOUBLE
 			float model_precision[4];
 			float prev_model_precision[4];
@@ -392,6 +424,11 @@ private:
 
 		static_assert(std::is_trivially_destructible_v<InstanceData>);
 		static_assert(std::is_trivially_constructible_v<InstanceData>);
+#ifdef REAL_T_IS_DOUBLE
+		static_assert(sizeof(InstanceData) == 320);
+#else
+		static_assert(sizeof(InstanceData) == 288);
+#endif
 
 		UBO ubo;
 
@@ -737,6 +774,15 @@ private:
 	};
 
 	RenderList render_list[RENDER_LIST_MAX];
+	uint32_t last_voxel_batch_visible = UINT32_MAX;
+	uint32_t last_voxel_batch_groups = UINT32_MAX;
+	uint32_t last_voxel_batch_draws = UINT32_MAX;
+	uint32_t last_voxel_batch_instances = UINT32_MAX;
+	uint32_t last_voxel_batch_unbatched = UINT32_MAX;
+	uint32_t last_voxel_batch_reject_key = UINT32_MAX;
+	uint32_t last_voxel_batch_reject_mirror = UINT32_MAX;
+	uint32_t last_voxel_batch_reject_instance_mode = UINT32_MAX;
+	uint32_t last_voxel_batch_reject_repeat_cap = UINT32_MAX;
 
 	virtual void _update_shader_quality_settings() override;
 
@@ -789,6 +835,10 @@ protected:
 	// world occupancy table. Keeping the layout present in Forward+ allows the
 	// shared clustered shader to compile without changing normal materials.
 	virtual void _add_voxel_occupancy_uniforms(Vector<RD::Uniform> &r_uniforms);
+	// Derived renderers populate deterministic per-instance extension fields.
+	// The default implementation leaves the zero-initialized row untouched.
+	virtual void _fill_voxel_instance_data(RID p_base, VoxelInstanceData &r_instance_data) const {}
+	RID _get_default_vec4_xform_buffer() const { return scene_shader.default_vec4_xform_buffer; }
 
 	virtual RID _render_buffers_get_normal_texture(Ref<RenderSceneBuffersRD> p_render_buffers) override;
 	virtual RID _render_buffers_get_velocity_texture(Ref<RenderSceneBuffersRD> p_render_buffers) override;
@@ -856,7 +906,7 @@ public:
 
 	virtual void update() override;
 
-	RenderForwardClustered();
+	RenderForwardClustered(bool p_voxel_hit_buffer_enabled = false, bool p_voxel_hit_position_buffer_enabled = false);
 	~RenderForwardClustered();
 };
 } // namespace RendererSceneRenderImplementation

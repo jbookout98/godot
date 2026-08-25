@@ -62,6 +62,10 @@ static VoxelVolumeStreamingManager *voxel_volume_streaming_manager = nullptr;
 
 void initialize_voxel_physics_3d_module(ModuleInitializationLevel p_level) {
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SERVERS) {
+		// This is consumed while the Voxel Forward renderer is constructed, before
+		// scene-level voxel material settings are registered.
+		GLOBAL_DEF("rendering/voxel_forward/architectural_hit_buffer/exact_position_enabled", false);
+		GLOBAL_DEF("rendering/voxel_forward/architectural_hit_buffer/precomputed_inverse_enabled", true);
 		PhysicsServer3DManager::get_singleton()->register_server("VoxelPhysics3D", callable_mp_static(_create_voxel_physics_3d_callback));
 	}
 
@@ -74,6 +78,9 @@ void initialize_voxel_physics_3d_module(ModuleInitializationLevel p_level) {
 		// The native RD visibility pass is deliberately opt-in until its output
 		// matches the established DDA path for multi-volume boundaries.
 		GLOBAL_DEF("rendering/voxel_forward/experimental_custom_visibility", false);
+		// Run exact voxel traversal in the depth prepass and reuse its compact
+		// owner/face payload from the materially heavier opaque color pass.
+		GLOBAL_DEF("rendering/voxel_forward/architectural_hit_buffer/enabled", true);
 		// Voxel Forward consumes this binary mask during directional lighting,
 		// replacing per-volume draws in conventional shadow cascades.
 		// Experimental until the compute budget and renderer-wide receiver path
@@ -87,6 +94,18 @@ void initialize_voxel_physics_3d_module(ModuleInitializationLevel p_level) {
 		GLOBAL_DEF("rendering/voxel_forward/shadow_mask/atlas_resolution", 512);
 		GLOBAL_DEF("rendering/voxel_forward/shadow_mask/atlas_near_extent_ratio", 0.25);
 		GLOBAL_DEF("rendering/voxel_forward/shadow_mask/atlas_recenter_ratio", 0.25);
+		GLOBAL_DEF("rendering/voxel_forward/shadow_mask/incremental_atlas_updates", true);
+		// Reliable world-edit rectangles are independent of camera atlas scrolling.
+		// This remains useful when scrolling is disabled because a one-brick edit
+		// should not require rebuilding every shadow texel.
+		GLOBAL_DEF("rendering/voxel_forward/shadow_mask/dirty_region_updates_enabled", true);
+		GLOBAL_DEF("rendering/voxel_forward/shadow_mask/temporal_rebuild_enabled", true);
+		// A 512x512 two-cascade atlas contains 524,288 texels. A 1,024-texel
+		// budget took 512 frames to publish its first complete atlas, which made
+		// otherwise bounded initialization appear broken. 4,096 keeps the work
+		// explicitly bounded while reducing default convergence to 128 frames.
+		GLOBAL_DEF("rendering/voxel_forward/shadow_mask/rebuild_texel_budget", 4096);
+		GLOBAL_DEF("rendering/voxel_forward/shadow_mask/force_full_rebuild", false);
 		GLOBAL_DEF("rendering/voxel_forward/shadow_mask/atlas_bias_voxels", 0.125);
 		GLOBAL_DEF("rendering/voxel_forward/shadow_mask/max_local_lights", 4);
 		GLOBAL_DEF("rendering/voxel_forward/shadow_mask/soft_shadow_mode", 0);
@@ -104,6 +123,7 @@ void initialize_voxel_physics_3d_module(ModuleInitializationLevel p_level) {
 		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::INT, "rendering/voxel_forward/shadow_mask/atlas_resolution", PROPERTY_HINT_RANGE, "128,2048,128"));
 		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_forward/shadow_mask/atlas_near_extent_ratio", PROPERTY_HINT_RANGE, "0.05,0.75,0.05"));
 		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_forward/shadow_mask/atlas_recenter_ratio", PROPERTY_HINT_RANGE, "0.05,0.75,0.05"));
+		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::INT, "rendering/voxel_forward/shadow_mask/rebuild_texel_budget", PROPERTY_HINT_RANGE, "64,4194304,64,or_greater"));
 		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_forward/shadow_mask/atlas_bias_voxels", PROPERTY_HINT_RANGE, "0,4,0.01"));
 		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::INT, "rendering/voxel_forward/shadow_mask/soft_shadow_mode", PROPERTY_HINT_ENUM, "Hard,Voxel Soft"));
 		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::INT, "rendering/voxel_forward/shadow_mask/soft_shadow_samples", PROPERTY_HINT_ENUM, "1 Sample:1,4 Samples:4,8 Samples:8"));
@@ -124,6 +144,11 @@ void initialize_voxel_physics_3d_module(ModuleInitializationLevel p_level) {
 		GLOBAL_DEF("rendering/voxel_forward/indirect_light/shadow_bias_voxels", 1.0);
 		GLOBAL_DEF("rendering/voxel_forward/indirect_light/intensity", 1.0);
 		GLOBAL_DEF("rendering/voxel_forward/indirect_light/dirty_updates_enabled", true);
+		GLOBAL_DEF("rendering/voxel_forward/indirect_light/temporal_updates_enabled", true);
+		GLOBAL_DEF("rendering/voxel_forward/indirect_light/dispatch_budget_per_frame", 1);
+		GLOBAL_DEF("rendering/voxel_forward/indirect_light/temporal_blend_enabled", true);
+		GLOBAL_DEF("rendering/voxel_forward/indirect_light/blend_dispatch_budget_per_frame", 1);
+		GLOBAL_DEF("rendering/voxel_forward/indirect_light/temporal_blend_frames", 6);
 		GLOBAL_DEF("rendering/voxel_forward/ambient_light/color", Color(0.22, 0.22, 0.22));
 		GLOBAL_DEF("rendering/voxel_forward/ambient_light/energy", 1.0);
 		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::INT, "rendering/voxel_forward/indirect_light/resolution", PROPERTY_HINT_RANGE, "24,96,8"));
@@ -137,6 +162,9 @@ void initialize_voxel_physics_3d_module(ModuleInitializationLevel p_level) {
 		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_forward/indirect_light/propagation_decay", PROPERTY_HINT_RANGE, "0,0.99,0.01"));
 		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_forward/indirect_light/shadow_bias_voxels", PROPERTY_HINT_RANGE, "0,8,0.05"));
 		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_forward/indirect_light/intensity", PROPERTY_HINT_RANGE, "0,8,0.05,or_greater"));
+		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::INT, "rendering/voxel_forward/indirect_light/dispatch_budget_per_frame", PROPERTY_HINT_RANGE, "1,16,1"));
+		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::INT, "rendering/voxel_forward/indirect_light/blend_dispatch_budget_per_frame", PROPERTY_HINT_RANGE, "1,3,1"));
+		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::INT, "rendering/voxel_forward/indirect_light/temporal_blend_frames", PROPERTY_HINT_RANGE, "1,60,1"));
 		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::COLOR, "rendering/voxel_forward/ambient_light/color", PROPERTY_HINT_COLOR_NO_ALPHA));
 		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_forward/ambient_light/energy", PROPERTY_HINT_RANGE, "0,8,0.05,or_greater"));
 		// Mirror rays are traced through the same sparse world occupancy used by

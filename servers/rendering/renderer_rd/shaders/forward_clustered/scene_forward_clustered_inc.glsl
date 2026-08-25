@@ -371,6 +371,7 @@ implementation_data_block;
 
 struct InstanceData {
 	mat3x4 transform;
+	mat3x4 inverse_transform;
 	vec4 compressed_aabb_position_pad; // Only .xyz is used. .w is padding.
 	vec4 compressed_aabb_size_pad; // Only .xyz is used. .w is padding.
 	vec4 uv_scale;
@@ -380,11 +381,24 @@ struct InstanceData {
 	uint layer_mask;
 	mat3x4 prev_transform;
 	vec4 lightmap_uv_scale;
+	ivec4 voxel_volume_dims_resource;
+	ivec4 voxel_brick_dims_neighbor_mask;
+	ivec4 voxel_atlas_dims_diagonal_mask;
+	vec4 voxel_size_pad;
 #ifdef USE_DOUBLE_PRECISION
 	vec4 model_precision;
 	vec4 prev_model_precision;
 #endif
 };
+
+#define MAX_VOXEL_BATCH_TEXTURES 576
+layout(set = 0, binding = 24) uniform texture3D voxel_batch_voxel_textures[MAX_VOXEL_BATCH_TEXTURES];
+layout(set = 0, binding = 25) uniform texture3D voxel_batch_brick_textures[MAX_VOXEL_BATCH_TEXTURES];
+layout(set = 0, binding = 26) uniform texture3D voxel_batch_neighbor_textures[MAX_VOXEL_BATCH_TEXTURES];
+
+// User helper functions are emitted at global scope. Each stage assigns this
+// invocation-local index before entering generated material code.
+uint voxel_current_instance_index = 0u;
 
 layout(set = 1, binding = 2, std430) buffer restrict readonly InstanceDataBuffer {
 	InstanceData data[];
@@ -499,6 +513,22 @@ layout(set = 1, binding = 34) uniform texture2D ssil_buffer;
 layout(set = 1, binding = 35) uniform texture2D ssr_buffer;
 layout(set = 1, binding = 36) uniform texture2D ssr_mip_level_buffer;
 #endif // USE_MULTIVIEW
+
+#ifdef VOXEL_HIT_BUFFER_ENABLED
+#ifdef USE_MULTIVIEW
+layout(set = 1, binding = 37) uniform utexture2DArray voxel_hit_buffer;
+layout(set = 1, binding = 38) uniform texture2DArray voxel_hit_depth_buffer;
+#ifdef VOXEL_HIT_POSITION_BUFFER_ENABLED
+layout(set = 1, binding = 39) uniform texture2DArray voxel_hit_position_buffer;
+#endif
+#else
+layout(set = 1, binding = 37) uniform utexture2D voxel_hit_buffer;
+layout(set = 1, binding = 38) uniform texture2D voxel_hit_depth_buffer;
+#ifdef VOXEL_HIT_POSITION_BUFFER_ENABLED
+layout(set = 1, binding = 39) uniform texture2D voxel_hit_position_buffer;
+#endif
+#endif
+#endif
 
 #endif
 

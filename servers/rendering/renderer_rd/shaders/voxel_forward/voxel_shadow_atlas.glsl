@@ -24,6 +24,7 @@ layout(push_constant, std430) uniform Params {
 	vec4 tangent_near_extent;
 	vec4 bitangent_far_extent;
 	ivec4 atlas_directory_steps;
+	ivec4 dispatch_rect;
 }
 params;
 
@@ -52,18 +53,24 @@ bool mixed_brick_occupied(uint code, ivec3 local_voxel) {
 	return (word & (1u << (local_index & 31u))) != 0u;
 }
 
-float distance_to_cell_exit(vec3 position, vec3 direction, float cell_size) {
+float distance_to_cell_exit(vec3 position, vec3 direction, vec3 inverse_direction, float cell_size) {
 	vec3 cell = floor(position / cell_size);
 	vec3 boundary = (cell + step(vec3(0.0), direction)) * cell_size;
 	vec3 distance = vec3(1e30);
-	if (abs(direction.x) > 1e-8) distance.x = (boundary.x - position.x) / direction.x;
-	if (abs(direction.y) > 1e-8) distance.y = (boundary.y - position.y) / direction.y;
-	if (abs(direction.z) > 1e-8) distance.z = (boundary.z - position.z) / direction.z;
+	if (abs(direction.x) > 1e-8) distance.x = (boundary.x - position.x) * inverse_direction.x;
+	if (abs(direction.y) > 1e-8) distance.y = (boundary.y - position.y) * inverse_direction.y;
+	if (abs(direction.z) > 1e-8) distance.z = (boundary.z - position.z) * inverse_direction.z;
 	return max(min(distance.x, min(distance.y, distance.z)), 0.0001);
 }
 
 float trace_first_occupied(vec3 ray_position, vec3 ray_direction, float maximum_distance) {
 	float traveled = 0.0;
+	// Direction is constant for the entire atlas. Pay the three divisions once
+	// per ray instead of once per traversal step.
+	vec3 inverse_direction = vec3(
+			abs(ray_direction.x) > 1e-8 ? 1.0 / ray_direction.x : 0.0,
+			abs(ray_direction.y) > 1e-8 ? 1.0 / ray_direction.y : 0.0,
+			abs(ray_direction.z) > 1e-8 ? 1.0 / ray_direction.z : 0.0);
 	ivec3 cached_brick_position = ivec3(0);
 	uint cached_brick_code = 0u;
 	bool brick_cached = false;
@@ -84,12 +91,12 @@ float trace_first_occupied(vec3 ray_position, vec3 ray_direction, float maximum_
 			if (mixed_brick_occupied(code, local_voxel)) {
 				return traveled;
 			}
-			float advance = distance_to_cell_exit(ray_position, ray_direction, 1.0) + 0.001;
+			float advance = distance_to_cell_exit(ray_position, ray_direction, inverse_direction, 1.0) + 0.001;
 			ray_position += ray_direction * advance;
 			traveled += advance;
 			continue;
 		}
-		float advance = distance_to_cell_exit(ray_position, ray_direction, 8.0) + 0.001;
+		float advance = distance_to_cell_exit(ray_position, ray_direction, inverse_direction, 8.0) + 0.001;
 		ray_position += ray_direction * advance;
 		traveled += advance;
 	}
@@ -97,7 +104,11 @@ float trace_first_occupied(vec3 ray_position, vec3 ray_direction, float maximum_
 }
 
 void main() {
-	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 local_pixel = ivec2(gl_GlobalInvocationID.xy);
+	if (any(greaterThanEqual(local_pixel, params.dispatch_rect.zw))) {
+		return;
+	}
+	ivec2 pixel = params.dispatch_rect.xy + local_pixel;
 	int tile_resolution = params.atlas_directory_steps.x;
 	int cascade_count = params.atlas_directory_steps.y;
 	if (pixel.y >= tile_resolution || pixel.x >= tile_resolution * cascade_count) {
@@ -108,7 +119,9 @@ void main() {
 	ivec2 tile_pixel = ivec2(pixel.x - cascade * tile_resolution, pixel.y);
 	float extent = cascade == 0 ? params.tangent_near_extent.w : params.bitangent_far_extent.w;
 	vec2 light_plane = ((vec2(tile_pixel) + vec2(0.5)) / float(tile_resolution) * 2.0 - 1.0) * extent;
-	vec3 light_direction = normalize(cross(params.tangent_near_extent.xyz, params.bitangent_far_extent.xyz));
+	// CPU construction keeps tangent and bitangent orthonormal, so their cross
+	// product is already the normalized light direction.
+	vec3 light_direction = cross(params.tangent_near_extent.xyz, params.bitangent_far_extent.xyz);
 	float depth_extent = params.atlas_center_depth.w;
 	vec3 ray_start_world = params.atlas_center_depth.xyz +
 			params.tangent_near_extent.xyz * light_plane.x +

@@ -62,7 +62,13 @@ public:
 		constexpr static uint16_t SHADER_VERSION_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI_MULTIVIEW = 6;
 		constexpr static uint16_t SHADER_VERSION_DEPTH_PASS_WITH_MATERIAL = 7;
 		constexpr static uint16_t SHADER_VERSION_DEPTH_PASS_WITH_SDF = 8;
-		constexpr static uint16_t SHADER_VERSION_COLOR_PASS = 9;
+		constexpr static uint16_t SHADER_VERSION_VOXEL_HIT_DEPTH_PASS = 9;
+		constexpr static uint16_t SHADER_VERSION_VOXEL_HIT_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS = 10;
+		constexpr static uint16_t SHADER_VERSION_VOXEL_HIT_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI = 11;
+		constexpr static uint16_t SHADER_VERSION_VOXEL_HIT_DEPTH_PASS_MULTIVIEW = 12;
+		constexpr static uint16_t SHADER_VERSION_VOXEL_HIT_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_MULTIVIEW = 13;
+		constexpr static uint16_t SHADER_VERSION_VOXEL_HIT_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI_MULTIVIEW = 14;
+		constexpr static uint16_t SHADER_VERSION_COLOR_PASS = 15;
 	};
 
 	enum ShaderColorPassFlags {
@@ -84,6 +90,12 @@ public:
 		PIPELINE_VERSION_DEPTH_PASS_MULTIVIEW,
 		PIPELINE_VERSION_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_MULTIVIEW,
 		PIPELINE_VERSION_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI_MULTIVIEW,
+		PIPELINE_VERSION_VOXEL_HIT_DEPTH_PASS,
+		PIPELINE_VERSION_VOXEL_HIT_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS,
+		PIPELINE_VERSION_VOXEL_HIT_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI,
+		PIPELINE_VERSION_VOXEL_HIT_DEPTH_PASS_MULTIVIEW,
+		PIPELINE_VERSION_VOXEL_HIT_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_MULTIVIEW,
+		PIPELINE_VERSION_VOXEL_HIT_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI_MULTIVIEW,
 		PIPELINE_VERSION_COLOR_PASS,
 		PIPELINE_VERSION_MAX
 	};
@@ -268,6 +280,9 @@ public:
 		bool uses_world_coordinates = false;
 		bool uses_screen_texture_mipmaps = false;
 		bool uses_z_clip_scale = false;
+		bool uses_voxel_hit_payload = false;
+		bool uses_voxel_inverse_model_matrix = false;
+		bool uses_voxel_batched_resources = false;
 		RSE::CullMode cull_mode = RSE::CULL_MODE_DISABLED;
 
 		bool stencil_enabled = false;
@@ -346,6 +361,8 @@ public:
 	SceneForwardClusteredShaderRD shader;
 	ShaderCompiler compiler;
 	bool emulate_point_size = false;
+	bool voxel_hit_buffer_enabled = false;
+	bool voxel_hit_position_buffer_enabled = false;
 
 	RID default_shader;
 	RID default_material;

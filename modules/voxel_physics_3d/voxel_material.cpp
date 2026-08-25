@@ -189,20 +189,11 @@ float voxel_face_ao(ivec3 voxel, vec3 face_position, int normal_axis, vec3 face_
 // The draw surface contains no vertex data. These indices synthesize an
 // outward-wound unit cube directly from VERTEX_ID.
 static const char *VOXEL_RAYMARCH_SHADER_PREFIX = R"SHADER(
-uniform sampler3D u_voxels : filter_nearest, repeat_disable;
-uniform sampler3D u_bricks : filter_nearest, repeat_disable;
-uniform sampler3D u_neighbor_faces : filter_nearest, repeat_disable;
+// VOLUME_RESOURCE_UNIFORMS
 uniform sampler2D u_palette : source_color, filter_nearest, repeat_disable;
 uniform sampler2D u_material : filter_nearest, repeat_disable;
 // OPTIONAL_MATERIAL_TEXTURE_UNIFORMS
 // TRANSPARENCY_UNIFORM
-uniform ivec3 u_volume_dims = ivec3(1);
-uniform ivec3 u_brick_dims = ivec3(1);
-uniform ivec3 u_atlas_brick_dims = ivec3(1);
-uniform int u_neighbor_mask = 0;
-uniform int u_neighbor_diagonal_mask = 0;
-uniform vec3 u_volume_size = vec3(0.1);
-uniform float u_voxel_size = 0.1;
 uniform float emission_energy = 1.0;
 uniform vec4 albedo_modulate : source_color = vec4(1.0);
 uniform float roughness_multiplier = 1.0;
@@ -285,7 +276,7 @@ ivec2 boundary_face_texel(int face, ivec3 voxel) {
 bool has_occupied_neighbor(int face, ivec3 voxel) {
 	if (face < 0 || (u_neighbor_mask & (1 << face)) == 0) return false;
 	ivec2 face_texel = boundary_face_texel(face, voxel);
-	uint packed_faces = uint(round(texelFetch(u_neighbor_faces, ivec3(face_texel.x >> 3, face_texel.y, face), 0).r * 255.0));
+	uint packed_faces = uint(texelFetch(u_neighbor_faces, ivec3(face_texel.x >> 3, face_texel.y, face), 0).r * 255.0 + 0.5);
 	return (packed_faces & (1u << uint(face_texel.x & 7))) != 0u;
 }
 
@@ -302,7 +293,7 @@ uint voxel_id_at(ivec3 voxel) {
 		return has_occupied_neighbor(face, boundary_voxel) ? 1u : 0u;
 	}
 	ivec3 brick = voxel / int(BRICK_SIZE);
-	uvec4 directory_bytes = uvec4(round(texelFetch(u_bricks, brick, 0) * 255.0));
+	uvec4 directory_bytes = uvec4(texelFetch(u_bricks, brick, 0) * 255.0 + vec4(0.5));
 	uint directory_code = directory_bytes.r | (directory_bytes.g << 8u) | (directory_bytes.b << 16u);
 	if (directory_code == 0u) return 0u;
 	if (directory_code == 1u) return directory_bytes.a;
@@ -313,7 +304,7 @@ uint voxel_id_at(ivec3 voxel) {
 		int(atlas_slot / uint(u_atlas_brick_dims.x * u_atlas_brick_dims.y))
 	);
 	ivec3 atlas_texel = atlas_brick * int(BRICK_SIZE) + voxel - brick * int(BRICK_SIZE);
-	return uint(round(texelFetch(u_voxels, atlas_texel, 0).r * 255.0));
+	return uint(texelFetch(u_voxels, atlas_texel, 0).r * 255.0 + 0.5);
 }
 
 uint voxel_ao_id_at(ivec3 voxel, inout ivec3 cached_brick, inout uvec4 cached_directory_bytes) {
@@ -329,7 +320,7 @@ uint voxel_ao_id_at(ivec3 voxel, inout ivec3 cached_brick, inout uvec4 cached_di
 		ivec3 brick = voxel / int(BRICK_SIZE);
 		if (any(notEqual(brick, cached_brick))) {
 			cached_brick = brick;
-			cached_directory_bytes = uvec4(round(texelFetch(u_bricks, brick, 0) * 255.0));
+			cached_directory_bytes = uvec4(texelFetch(u_bricks, brick, 0) * 255.0 + vec4(0.5));
 		}
 		uint directory_code = cached_directory_bytes.r | (cached_directory_bytes.g << 8u) | (cached_directory_bytes.b << 16u);
 		if (directory_code == 0u) return 0u;
@@ -341,7 +332,7 @@ uint voxel_ao_id_at(ivec3 voxel, inout ivec3 cached_brick, inout uvec4 cached_di
 			int(atlas_slot / uint(u_atlas_brick_dims.x * u_atlas_brick_dims.y))
 		);
 		ivec3 atlas_texel = atlas_brick * int(BRICK_SIZE) + voxel - brick * int(BRICK_SIZE);
-		return uint(round(texelFetch(u_voxels, atlas_texel, 0).r * 255.0));
+		return uint(texelFetch(u_voxels, atlas_texel, 0).r * 255.0 + 0.5);
 	}
 	if (outside_axis_count == 1) return voxel_id_at(voxel);
 
@@ -362,7 +353,7 @@ uint voxel_ao_id_at(ivec3 voxel, inout ivec3 cached_brick, inout uvec4 cached_di
 		diagonal = 12 + (offset.x > 0 ? 4 : 0) + (offset.y > 0 ? 2 : 0) + (offset.z > 0 ? 1 : 0);
 	}
 	if ((u_neighbor_diagonal_mask & (1 << diagonal)) == 0) return 0u;
-	uint packed_occupancy = uint(round(texelFetch(u_neighbor_faces, ivec3(coordinate >> 3, 0, 6 + diagonal), 0).r * 255.0));
+	uint packed_occupancy = uint(texelFetch(u_neighbor_faces, ivec3(coordinate >> 3, 0, 6 + diagonal), 0).r * 255.0 + 0.5);
 	return (packed_occupancy & (1u << uint(coordinate & 7))) != 0u ? 1u : 0u;
 }
 
@@ -441,6 +432,7 @@ void vertex() {
 }
 
 void fragment() {
+	// ARCH_DEPTH_PATH_BEGIN
 	vec3 dimensions = vec3(u_volume_dims);
 	vec3 brick_dimensions = vec3(u_brick_dims);
 	bool parallel_projection = abs(PROJECTION_MATRIX[3][3]) > 0.5;
@@ -483,13 +475,10 @@ void fragment() {
 	int brick_entry_axis = entry_axis;
 	bool hit = false;
 	float hit_t = 0.0;
-	int hit_axis = -1;
-	ivec3 hit_voxel = ivec3(0);
-	uint hit_id = 0u;
 	int outer_limit = min(int(brick_dimensions.x + brick_dimensions.y + brick_dimensions.z) + 3, max_outer_steps);
 
 	for (int outer = 0; outer < outer_limit; outer++) {
-		uvec4 directory_bytes = uvec4(round(texelFetch(u_bricks, brick_coordinate, 0) * 255.0));
+		uvec4 directory_bytes = uvec4(texelFetch(u_bricks, brick_coordinate, 0) * 255.0 + vec4(0.5));
 		uint directory_code = directory_bytes.r | (directory_bytes.g << 8u) | (directory_bytes.b << 16u);
 		if (directory_code == 1u) {
 			hit_id = directory_bytes.a;
@@ -522,7 +511,7 @@ void fragment() {
 
 			for (int fine = 0; fine < max_fine_steps; fine++) {
 				ivec3 atlas_texel = atlas_brick * int(BRICK_SIZE) + voxel_coordinate - brick_minimum_i;
-				hit_id = uint(round(texelFetch(u_voxels, atlas_texel, 0).r * 255.0));
+				hit_id = uint(texelFetch(u_voxels, atlas_texel, 0).r * 255.0 + 0.5);
 				if (hit_id > 0u) {
 					hit = true;
 					hit_t = max(voxel_enter_t, start_t);
@@ -567,7 +556,6 @@ void fragment() {
 		}
 		if (exposed_axis >= 0) hit_axis = exposed_axis;
 	}
-	vec3 local_normal;
 	if (hit_axis >= 0) {
 		local_normal = vec3(0.0);
 		local_normal[hit_axis] = -float(step_direction[hit_axis]);
@@ -577,11 +565,11 @@ void fragment() {
 		hit_t = (face_plane - ray_origin[hit_axis]) * inverse_direction[hit_axis];
 	} else {
 		vec3 direction_abs = abs(ray_direction);
-		if (direction_abs.x >= direction_abs.y && direction_abs.x >= direction_abs.z) local_normal = vec3(-sign(ray_direction.x), 0.0, 0.0);
-		else if (direction_abs.y >= direction_abs.z) local_normal = vec3(0.0, -sign(ray_direction.y), 0.0);
-		else local_normal = vec3(0.0, 0.0, -sign(ray_direction.z));
+		if (direction_abs.x >= direction_abs.y && direction_abs.x >= direction_abs.z) { hit_axis = 0; local_normal = vec3(-sign(ray_direction.x), 0.0, 0.0); }
+		else if (direction_abs.y >= direction_abs.z) { hit_axis = 1; local_normal = vec3(0.0, -sign(ray_direction.y), 0.0); }
+		else { hit_axis = 2; local_normal = vec3(0.0, 0.0, -sign(ray_direction.z)); }
 	}
-	vec3 hit_voxel_position = ray_origin + ray_direction * hit_t;
+	hit_voxel_position = ray_origin + ray_direction * hit_t;
 	if (hit_axis >= 0) {
 		hit_voxel_position[hit_axis] = float(hit_voxel[hit_axis]) + (local_normal[hit_axis] > 0.0 ? 1.0 : 0.0);
 	}
@@ -592,12 +580,13 @@ void fragment() {
 		discard;
 	}
 
-	vec3 hit_local_position = hit_voxel_position * u_voxel_size;
-	vec4 hit_view_position = VIEW_MATRIX * MODEL_MATRIX * vec4(hit_local_position, 1.0);
+	hit_local_position = hit_voxel_position * u_voxel_size;
+	hit_view_position = VIEW_MATRIX * MODEL_MATRIX * vec4(hit_local_position, 1.0);
 	vec4 hit_clip_position = PROJECTION_MATRIX * hit_view_position;
 
 	if (abs(hit_clip_position.w) <= DIR_EPSILON) discard;
-	DEPTH = hit_clip_position.z / hit_clip_position.w;
+	VOXEL_DEPTH = hit_clip_position.z / hit_clip_position.w;
+	// ARCH_DEPTH_PATH_END
 
 	NORMAL = normalize(mat3(VIEW_MATRIX) * (MODEL_NORMAL_MATRIX * local_normal));
 
@@ -626,6 +615,7 @@ void fragment() {
 	// INDIRECT_LIGHT_OUTPUT
 	// REFLECTION_OUTPUT
 	// TRANSPARENCY_OUTPUT
+	// ARCH_COLOR_PATH_END
 }
 
 // OCCUPANCY_LIGHT
@@ -643,6 +633,10 @@ enum VoxelShaderFeature : uint32_t {
 	VOXEL_SHADER_METALLIC_TEXTURE = 1u << 11,
 	VOXEL_SHADER_SPECULARITY_TEXTURE = 1u << 12,
 	VOXEL_SHADER_EMISSION_TEXTURE = 1u << 13,
+	VOXEL_SHADER_ARCHITECTURAL_HIT_BUFFER = 1u << 14,
+	VOXEL_SHADER_ARCHITECTURAL_HIT_POSITION = 1u << 15,
+	VOXEL_SHADER_PRECOMPUTED_INVERSE = 1u << 16,
+	VOXEL_SHADER_BATCHED_RESOURCES = 1u << 17,
 };
 
 static HashMap<uint32_t, Ref<Shader>> voxel_shader_cache;
@@ -738,6 +732,12 @@ void VoxelMaterial::_rebuild_shader() {
 			bool(GLOBAL_GET("rendering/voxel_forward/indirect_light/enabled"));
 	const bool use_voxel_forward_reflection = shading_mode == SHADING_MODE_PBR &&
 			bool(GLOBAL_GET("rendering/voxel_forward/reflections/enabled"));
+	const bool use_architectural_hit_buffer = RenderingMethod::is_current_voxel_forward_method() &&
+			bool(GLOBAL_GET("rendering/voxel_forward/architectural_hit_buffer/enabled"));
+	const bool use_architectural_hit_position = use_architectural_hit_buffer &&
+			bool(GLOBAL_GET("rendering/voxel_forward/architectural_hit_buffer/exact_position_enabled"));
+	const bool use_precomputed_inverse = use_architectural_hit_buffer && !use_architectural_hit_position &&
+			bool(GLOBAL_GET("rendering/voxel_forward/architectural_hit_buffer/precomputed_inverse_enabled"));
 	// Voxel Forward is face-shaded by definition. Point and spot lights must use
 	// the same face-center receiver as directional visibility, so illumination
 	// cannot form a smooth gradient across an individual voxel face.
@@ -756,6 +756,10 @@ void VoxelMaterial::_rebuild_shader() {
 	shader_key |= metallic_texture_enabled ? VOXEL_SHADER_METALLIC_TEXTURE : 0;
 	shader_key |= specularity_texture_enabled ? VOXEL_SHADER_SPECULARITY_TEXTURE : 0;
 	shader_key |= emission_texture_enabled ? VOXEL_SHADER_EMISSION_TEXTURE : 0;
+	shader_key |= use_architectural_hit_buffer ? VOXEL_SHADER_ARCHITECTURAL_HIT_BUFFER : 0;
+	shader_key |= use_architectural_hit_position ? VOXEL_SHADER_ARCHITECTURAL_HIT_POSITION : 0;
+	shader_key |= use_precomputed_inverse ? VOXEL_SHADER_PRECOMPUTED_INVERSE : 0;
+	shader_key |= batched_resources_enabled ? VOXEL_SHADER_BATCHED_RESOURCES : 0;
 	Ref<Shader> &voxel_shader = voxel_shader_cache[shader_key];
 	if (voxel_shader.is_null()) {
 		voxel_shader.instantiate();
@@ -770,6 +774,120 @@ void VoxelMaterial::_rebuild_shader() {
 			code += ", ambient_light_disabled";
 		}
 		String body = String(VOXEL_RAYMARCH_SHADER_PREFIX) + String(VOXEL_RAYMARCH_SHADER_SUFFIX);
+		if (batched_resources_enabled) {
+			body = body.replace("// VOLUME_RESOURCE_UNIFORMS", R"SHADER(
+#define u_voxels VOXEL_BATCH_VOXELS
+#define u_bricks VOXEL_BATCH_BRICKS
+#define u_neighbor_faces VOXEL_BATCH_NEIGHBORS
+#define u_volume_dims VOXEL_VOLUME_DIMS
+#define u_brick_dims VOXEL_BRICK_DIMS
+#define u_atlas_brick_dims VOXEL_ATLAS_BRICK_DIMS
+#define u_neighbor_mask VOXEL_NEIGHBOR_MASK
+#define u_neighbor_diagonal_mask VOXEL_NEIGHBOR_DIAGONAL_MASK
+#define u_voxel_size VOXEL_VOXEL_SIZE
+)SHADER");
+		} else {
+			body = body.replace("// VOLUME_RESOURCE_UNIFORMS", R"SHADER(
+uniform sampler3D u_voxels : filter_nearest, repeat_disable;
+uniform sampler3D u_bricks : filter_nearest, repeat_disable;
+uniform sampler3D u_neighbor_faces : filter_nearest, repeat_disable;
+uniform ivec3 u_volume_dims = ivec3(1);
+uniform ivec3 u_brick_dims = ivec3(1);
+uniform ivec3 u_atlas_brick_dims = ivec3(1);
+uniform int u_neighbor_mask = 0;
+uniform int u_neighbor_diagonal_mask = 0;
+uniform float u_voxel_size = 0.1;
+)SHADER");
+		}
+		if (use_architectural_hit_buffer) {
+			body = body.replace("// ARCH_DEPTH_PATH_BEGIN", R"SHADER(
+	if (IN_DEPTH_PASS) {
+		vec3 local_normal = vec3(0.0);
+		vec3 hit_voxel_position = vec3(0.0);
+		vec3 hit_local_position = vec3(0.0);
+		vec4 hit_view_position = vec4(0.0);
+		int hit_axis = -1;
+		ivec3 hit_voxel = ivec3(0);
+		uint hit_id = 0u;
+)SHADER");
+			body = body.replace("// ARCH_DEPTH_PATH_END", R"SHADER(
+		// The normal is the only surface attribute needed by normal/roughness
+		// depth layouts. Material, AO, lighting, and reflection evaluation begin
+		// exclusively in the color branch below.
+		vec3 world_geometric_normal = normalize(MODEL_NORMAL_MATRIX * local_normal);
+		NORMAL = normalize(mat3(VIEW_MATRIX) * world_geometric_normal);
+		uint local_face_code = uint(hit_axis * 2 + (local_normal[hit_axis] > 0.0 ? 1 : 0));
+		vec3 absolute_world_normal = abs(world_geometric_normal);
+		int world_axis = absolute_world_normal.x >= absolute_world_normal.y && absolute_world_normal.x >= absolute_world_normal.z ? 0 : (absolute_world_normal.y >= absolute_world_normal.z ? 1 : 2);
+		float off_axis_amount = absolute_world_normal[(world_axis + 1) % 3] + absolute_world_normal[(world_axis + 2) % 3];
+		uint world_face_code = 7u;
+		if (absolute_world_normal[world_axis] >= 0.9999 && off_axis_amount <= 0.0001) {
+			world_face_code = uint(world_axis * 2 + (world_geometric_normal[world_axis] > 0.0 ? 1 : 0));
+		}
+		// The high 18 bits store owner+1. This covers instance indices 0..262142,
+		// far beyond the Voxel Forward resident-volume limit, without permitting
+		// a wrapped owner to validate as another volume.
+		uint encoded_owner = uint(VOXEL_INSTANCE_ID) + 1u;
+		if (encoded_owner > 0x3FFFFu) discard;
+		VOXEL_HIT_PAYLOAD = (encoded_owner << 14u) | (world_face_code << 11u) | (local_face_code << 8u) | (hit_id & 0xFFu);
+		// Store exact object-local voxel coordinates. The color pass validates the
+		// owner payload before consuming this value, so overlapping volumes cannot
+		// read one another's hit position.
+		// ARCH_HIT_POSITION_WRITE
+	} else {
+		vec3 local_normal = vec3(0.0);
+		vec3 hit_voxel_position = vec3(0.0);
+		vec3 hit_local_position = vec3(0.0);
+		vec4 hit_view_position = vec4(0.0);
+		int hit_axis = -1;
+		ivec3 hit_voxel = ivec3(0);
+		uint hit_id = 0u;
+
+		uint encoded_owner = VOXEL_HIT_PAYLOAD >> 14u;
+		if (encoded_owner == 0u || encoded_owner != uint(VOXEL_INSTANCE_ID) + 1u) discard;
+		uint face_code = (VOXEL_HIT_PAYLOAD >> 8u) & 0x7u;
+		if (face_code >= 6u) discard;
+		hit_axis = int(face_code >> 1u);
+		local_normal = vec3(0.0);
+		local_normal[hit_axis] = (face_code & 1u) != 0u ? 1.0 : -1.0;
+		hit_id = VOXEL_HIT_PAYLOAD & 0xFFu;
+
+		// ARCH_HIT_POSITION_READ
+		hit_voxel = ivec3(floor(hit_voxel_position - local_normal * (EPSILON * 4.0)));
+		if (any(lessThan(hit_voxel, ivec3(0))) || any(greaterThanEqual(hit_voxel, u_volume_dims))) discard;
+)SHADER");
+			body = body.replace("// ARCH_HIT_POSITION_WRITE", use_architectural_hit_position ? String("VOXEL_HIT_POSITION = vec4(hit_voxel_position, 1.0);") : String());
+			body = body.replace("// ARCH_HIT_POSITION_READ", use_architectural_hit_position ? String(R"SHADER(
+		if (VOXEL_HIT_POSITION.w <= 0.0) discard;
+		hit_voxel_position = VOXEL_HIT_POSITION.xyz;
+		hit_local_position = hit_voxel_position * u_voxel_size;
+		hit_view_position = VIEW_MATRIX * MODEL_MATRIX * vec4(hit_local_position, 1.0);
+)SHADER") : String(R"SHADER(
+		vec2 hit_ndc_xy = SCREEN_UV * 2.0 - vec2(1.0);
+		vec4 reconstructed_view = INV_PROJECTION_MATRIX * vec4(hit_ndc_xy, VOXEL_HIT_DEPTH, 1.0);
+		if (abs(reconstructed_view.w) <= DIR_EPSILON) discard;
+		reconstructed_view /= reconstructed_view.w;
+		hit_view_position = reconstructed_view;
+		vec3 reconstructed_world = (INV_VIEW_MATRIX * reconstructed_view).xyz;
+		// ARCH_INVERSE_MODEL_RECONSTRUCTION
+		hit_voxel_position = hit_local_position / u_voxel_size;
+		hit_voxel_position[hit_axis] = round(hit_voxel_position[hit_axis]);
+)SHADER"));
+			body = body.replace("// ARCH_INVERSE_MODEL_RECONSTRUCTION", use_precomputed_inverse ? String("hit_local_position = (VOXEL_INV_MODEL_MATRIX * vec4(reconstructed_world, 1.0)).xyz;") : String("hit_local_position = (inverse(MODEL_MATRIX) * vec4(reconstructed_world, 1.0)).xyz;"));
+			body = body.replace("// ARCH_COLOR_PATH_END", "\t}");
+		} else {
+			body = body.replace("// ARCH_DEPTH_PATH_BEGIN", R"SHADER(
+	vec3 local_normal = vec3(0.0);
+	vec3 hit_voxel_position = vec3(0.0);
+	vec3 hit_local_position = vec3(0.0);
+	vec4 hit_view_position = vec4(0.0);
+	int hit_axis = -1;
+	ivec3 hit_voxel = ivec3(0);
+	uint hit_id = 0u;
+)SHADER");
+			body = body.replace("// ARCH_DEPTH_PATH_END", "");
+			body = body.replace("// ARCH_COLOR_PATH_END", "");
+		}
 		String ao_uniforms;
 		String ao_functions;
 		String ao_output = R"SHADER(
@@ -1211,6 +1329,18 @@ void VoxelMaterial::set_texture_features(bool p_metallic_enabled, bool p_specula
 	if (get_shader().is_valid()) {
 		_rebuild_shader();
 	}
+}
+
+void VoxelMaterial::set_batched_resources_enabled(bool p_enabled) {
+	if (batched_resources_enabled == p_enabled) {
+		return;
+	}
+	batched_resources_enabled = p_enabled;
+	_rebuild_shader();
+}
+
+bool VoxelMaterial::is_batched_resources_enabled() const {
+	return batched_resources_enabled;
 }
 
 void VoxelMaterial::ensure_shader() {

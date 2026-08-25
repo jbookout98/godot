@@ -17,6 +17,9 @@ layout(set = 0, binding = 3, std140) uniform OccupancyData {
 }
 occupancy;
 
+#ifdef USE_VOXEL_HIT_PAYLOAD
+layout(set = 0, binding = 6) uniform usampler2D voxel_hit_buffer;
+#else
 layout(set = 0, binding = 4, std430) readonly buffer WorldDirectory {
 	uvec4 entries[];
 }
@@ -26,6 +29,7 @@ layout(set = 0, binding = 5, std430) readonly buffer MixedBricks {
 	uint words[];
 }
 mixed_bricks;
+#endif
 
 layout(push_constant, std430) uniform Params {
 	mat4 inv_view_projection;
@@ -52,6 +56,7 @@ vec2 disk_sample(int index) {
 	return vec2(-0.100, 0.300);
 }
 
+#ifndef USE_VOXEL_HIT_PAYLOAD
 uint brick_hash(ivec3 position) {
 	return uint(position.x) * 73856093u ^ uint(position.y) * 19349663u ^ uint(position.z) * 83492791u;
 }
@@ -149,6 +154,39 @@ bool receiver_face_data(vec3 world_position, vec3 view_ray_direction, vec3 tange
 	face_key = ivec4(occupied_voxel, axis * 2 + (normal_sign > 0.0 ? 2 : 1));
 	return true;
 }
+#else
+bool payload_receiver_face_data(vec3 world_position, uint hit_payload, vec3 tangent, vec3 bitangent, vec3 light_direction, out vec3 face_center_world, out vec2 depth_slope, out ivec4 face_key) {
+	uint world_face_code = (hit_payload >> 11u) & 0x7u;
+	if (hit_payload == 0u || world_face_code >= 6u) {
+		face_center_world = world_position;
+		depth_slope = vec2(0.0);
+		face_key = ivec4(0);
+		return false;
+	}
+
+	int axis = int(world_face_code >> 1u);
+	float normal_sign = (world_face_code & 1u) != 0u ? 1.0 : -1.0;
+	vec3 receiver_normal = vec3(0.0);
+	receiver_normal[axis] = normal_sign;
+	vec3 voxel_position = (world_position - occupancy.world_origin_voxel_size.xyz) / occupancy.world_origin_voxel_size.w;
+	// Depth is snapped to the exact face plane. Step inward before floor() so
+	// both positive and negative faces select the solid voxel deterministically.
+	ivec3 occupied_voxel = ivec3(floor(voxel_position - receiver_normal * 0.0001));
+
+	vec3 face_center_voxel = vec3(occupied_voxel) + vec3(0.5);
+	face_center_voxel[axis] = float(occupied_voxel[axis]) + (normal_sign > 0.0 ? 1.0 : 0.0);
+	face_center_world = occupancy.world_origin_voxel_size.xyz + face_center_voxel * occupancy.world_origin_voxel_size.w;
+	face_key = ivec4(occupied_voxel, axis * 2 + (normal_sign > 0.0 ? 2 : 1));
+
+	float light_denominator = dot(receiver_normal, light_direction);
+	if (abs(light_denominator) <= 0.0001) {
+		depth_slope = vec2(0.0);
+	} else {
+		depth_slope = vec2(dot(receiver_normal, tangent), dot(receiver_normal, bitangent)) / light_denominator;
+	}
+	return true;
+}
+#endif
 
 float nearest_shadow_compare(vec2 atlas_position, vec2 receiver_depth_slope, float atlas_texel_world_size, int cascade, int tile_resolution, float receiver_depth, float bias_world) {
 	ivec2 tile_texel = clamp(ivec2(round(atlas_position)), ivec2(0), ivec2(tile_resolution - 1));
@@ -198,11 +236,16 @@ void main() {
 			vec2 ndc_xy = (vec2(depth_pixel) + vec2(0.5)) / vec2(depth_size) * 2.0 - 1.0;
 			vec4 world_h = params.inv_view_projection * vec4(ndc_xy, depth, 1.0);
 			vec3 world_position = world_h.xyz / world_h.w;
+			vec3 face_center_world;
+#ifdef USE_VOXEL_HIT_PAYLOAD
+			uint hit_payload = texelFetch(voxel_hit_buffer, depth_pixel, 0).r;
+			voxel_receiver = payload_receiver_face_data(world_position, hit_payload, params.tangent_near_extent.xyz, params.bitangent_far_extent.xyz, normalize(cross(params.tangent_near_extent.xyz, params.bitangent_far_extent.xyz)), face_center_world, receiver_depth_slope, face_key);
+#else
 			vec4 near_h = params.inv_view_projection * vec4(ndc_xy, 1.0, 1.0);
 			vec3 near_position = near_h.xyz / near_h.w;
 			vec3 view_ray_direction = normalize(world_position - near_position);
-			vec3 face_center_world;
 			voxel_receiver = receiver_face_data(world_position, view_ray_direction, params.tangent_near_extent.xyz, params.bitangent_far_extent.xyz, normalize(cross(params.tangent_near_extent.xyz, params.bitangent_far_extent.xyz)), face_center_world, receiver_depth_slope, face_key);
+#endif
 			receiver_position = voxel_receiver ? face_center_world : world_position;
 			evaluate_shadow = true;
 		}

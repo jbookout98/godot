@@ -82,6 +82,9 @@ void SceneShaderForwardClustered::ShaderData::set_code(const String &p_code) {
 	uses_world_coordinates = false;
 	uses_particle_trails = false;
 	uses_z_clip_scale = false;
+	uses_voxel_hit_payload = false;
+	uses_voxel_inverse_model_matrix = false;
+	uses_voxel_batched_resources = false;
 
 	int depth_drawi = DEPTH_DRAW_OPAQUE;
 
@@ -151,6 +154,9 @@ void SceneShaderForwardClustered::ShaderData::set_code(const String &p_code) {
 	actions.write_flag_pointers["VERTEX"] = &uses_vertex;
 	actions.write_flag_pointers["POSITION"] = &uses_position;
 	actions.write_flag_pointers["Z_CLIP_SCALE"] = &uses_z_clip_scale;
+	actions.usage_flag_pointers["VOXEL_HIT_PAYLOAD"] = &uses_voxel_hit_payload;
+	actions.usage_flag_pointers["VOXEL_INV_MODEL_MATRIX"] = &uses_voxel_inverse_model_matrix;
+	actions.usage_flag_pointers["VOXEL_BATCH_VOXELS"] = &uses_voxel_batched_resources;
 
 	actions.stencil_mode_values["read"] = Pair<int *, int>(&stencil_readi, STENCIL_FLAG_READ);
 	actions.stencil_mode_values["write"] = Pair<int *, int>(&stencil_writei, STENCIL_FLAG_WRITE);
@@ -293,6 +299,18 @@ uint16_t SceneShaderForwardClustered::ShaderData::_get_shader_version(PipelineVe
 			return ShaderVersion::SHADER_VERSION_DEPTH_PASS_WITH_MATERIAL + ubershader_base;
 		case PIPELINE_VERSION_DEPTH_PASS_WITH_SDF:
 			return ShaderVersion::SHADER_VERSION_DEPTH_PASS_WITH_SDF + ubershader_base;
+		case PIPELINE_VERSION_VOXEL_HIT_DEPTH_PASS:
+			return ShaderVersion::SHADER_VERSION_VOXEL_HIT_DEPTH_PASS + ubershader_base;
+		case PIPELINE_VERSION_VOXEL_HIT_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS:
+			return ShaderVersion::SHADER_VERSION_VOXEL_HIT_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS + ubershader_base;
+		case PIPELINE_VERSION_VOXEL_HIT_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI:
+			return ShaderVersion::SHADER_VERSION_VOXEL_HIT_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI + ubershader_base;
+		case PIPELINE_VERSION_VOXEL_HIT_DEPTH_PASS_MULTIVIEW:
+			return ShaderVersion::SHADER_VERSION_VOXEL_HIT_DEPTH_PASS_MULTIVIEW + ubershader_base;
+		case PIPELINE_VERSION_VOXEL_HIT_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_MULTIVIEW:
+			return ShaderVersion::SHADER_VERSION_VOXEL_HIT_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_MULTIVIEW + ubershader_base;
+		case PIPELINE_VERSION_VOXEL_HIT_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI_MULTIVIEW:
+			return ShaderVersion::SHADER_VERSION_VOXEL_HIT_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI_MULTIVIEW + ubershader_base;
 		case PIPELINE_VERSION_COLOR_PASS: {
 			int shader_flags = 0;
 
@@ -345,8 +363,11 @@ void SceneShaderForwardClustered::ShaderData::_create_pipeline(PipelineKey p_pip
 	RD::PipelineColorBlendState blend_state_color_blend;
 	blend_state_color_blend.attachments = { blend_attachment, RD::PipelineColorBlendState::Attachment(), RD::PipelineColorBlendState::Attachment() };
 	RD::PipelineColorBlendState blend_state_color_opaque = RD::PipelineColorBlendState::create_disabled(3);
-	RD::PipelineColorBlendState blend_state_depth_normal_roughness = RD::PipelineColorBlendState::create_disabled(1);
-	RD::PipelineColorBlendState blend_state_depth_normal_roughness_giprobe = RD::PipelineColorBlendState::create_disabled(2);
+	const bool hit_buffer_enabled = SceneShaderForwardClustered::singleton->voxel_hit_buffer_enabled;
+	const bool hit_position_buffer_enabled = SceneShaderForwardClustered::singleton->voxel_hit_position_buffer_enabled;
+	RD::PipelineColorBlendState blend_state_depth = RD::PipelineColorBlendState::create_disabled(hit_buffer_enabled ? (hit_position_buffer_enabled ? 2 : 1) : 0);
+	RD::PipelineColorBlendState blend_state_depth_normal_roughness = RD::PipelineColorBlendState::create_disabled(hit_buffer_enabled ? (hit_position_buffer_enabled ? 3 : 2) : 1);
+	RD::PipelineColorBlendState blend_state_depth_normal_roughness_giprobe = RD::PipelineColorBlendState::create_disabled(hit_buffer_enabled ? (hit_position_buffer_enabled ? 4 : 3) : 2);
 
 	RD::PipelineDepthStencilState depth_stencil_state;
 
@@ -430,6 +451,12 @@ void SceneShaderForwardClustered::ShaderData::_create_pipeline(PipelineKey p_pip
 
 	RD::PipelineColorBlendState blend_state;
 	if (p_pipeline_key.version == PIPELINE_VERSION_COLOR_PASS) {
+		if (uses_voxel_hit_payload) {
+			// Proxy depth is the volume AABB, not the exact voxel surface. The
+			// ownership payload performs the exact visibility test in the shader.
+			depth_stencil_state.depth_compare_operator = RD::COMPARE_OP_ALWAYS;
+			depth_stencil_state.enable_depth_write = false;
+		}
 		if (p_pipeline_key.color_pass_flags & PIPELINE_COLOR_PASS_FLAG_TRANSPARENT) {
 			if (alpha_antialiasing_mode == ALPHA_ANTIALIASING_ALPHA_TO_COVERAGE) {
 				multisample_state.enable_alpha_to_coverage = true;
@@ -446,7 +473,7 @@ void SceneShaderForwardClustered::ShaderData::_create_pipeline(PipelineKey p_pip
 		} else {
 			blend_state = blend_state_color_opaque;
 
-			if (depth_pre_pass_enabled) {
+			if (depth_pre_pass_enabled && !uses_voxel_hit_payload) {
 				// We already have a depth from the depth pre-pass, there is no need to write it again.
 				// In addition we can use COMPARE_OP_EQUAL instead of COMPARE_OP_LESS_OR_EQUAL.
 				// This way we can use the early depth test to discard transparent fragments before the fragment shader even starts.
@@ -464,6 +491,14 @@ void SceneShaderForwardClustered::ShaderData::_create_pipeline(PipelineKey p_pip
 			case PIPELINE_VERSION_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI_MULTIVIEW:
 				blend_state = blend_state_depth_normal_roughness_giprobe;
 				break;
+			case PIPELINE_VERSION_VOXEL_HIT_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI:
+			case PIPELINE_VERSION_VOXEL_HIT_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI_MULTIVIEW:
+				blend_state = blend_state_depth_normal_roughness_giprobe;
+				break;
+			case PIPELINE_VERSION_VOXEL_HIT_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS:
+			case PIPELINE_VERSION_VOXEL_HIT_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_MULTIVIEW:
+				blend_state = blend_state_depth_normal_roughness;
+				break;
 			case PIPELINE_VERSION_DEPTH_PASS_WITH_MATERIAL:
 				// Writes to normal and roughness in opaque way.
 				blend_state = RD::PipelineColorBlendState::create_disabled(5);
@@ -471,6 +506,11 @@ void SceneShaderForwardClustered::ShaderData::_create_pipeline(PipelineKey p_pip
 			case PIPELINE_VERSION_DEPTH_PASS:
 			case PIPELINE_VERSION_DEPTH_PASS_DP:
 			case PIPELINE_VERSION_DEPTH_PASS_MULTIVIEW:
+				break;
+			case PIPELINE_VERSION_VOXEL_HIT_DEPTH_PASS:
+			case PIPELINE_VERSION_VOXEL_HIT_DEPTH_PASS_MULTIVIEW:
+				blend_state = blend_state_depth;
+				break;
 			case PIPELINE_VERSION_DEPTH_PASS_WITH_SDF:
 			default:
 				break;
@@ -635,6 +675,8 @@ SceneShaderForwardClustered::~SceneShaderForwardClustered() {
 
 void SceneShaderForwardClustered::init(const String p_defines) {
 	RendererRD::MaterialStorage *material_storage = RendererRD::MaterialStorage::get_singleton();
+	voxel_hit_buffer_enabled = p_defines.contains("VOXEL_HIT_BUFFER_ENABLED");
+	voxel_hit_position_buffer_enabled = p_defines.contains("VOXEL_HIT_POSITION_BUFFER_ENABLED");
 
 	emulate_point_size = !RD::get_singleton()->has_feature(RD::SUPPORTS_POINT_SIZE);
 
@@ -651,6 +693,12 @@ void SceneShaderForwardClustered::init(const String p_defines) {
 			shader_versions.push_back(ShaderRD::VariantDefine(SHADER_GROUP_ADVANCED_MULTIVIEW, base_define + "\n#define USE_MULTIVIEW\n#define MODE_RENDER_DEPTH\n#define MODE_RENDER_NORMAL_ROUGHNESS\n#define MODE_RENDER_VOXEL_GI\n", false)); // SHADER_VERSION_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI_MULTIVIEW
 			shader_versions.push_back(ShaderRD::VariantDefine(SHADER_GROUP_ADVANCED, base_define + "\n#define MODE_RENDER_DEPTH\n#define MODE_RENDER_MATERIAL\n", false)); // SHADER_VERSION_DEPTH_PASS_WITH_MATERIAL
 			shader_versions.push_back(ShaderRD::VariantDefine(SHADER_GROUP_ADVANCED, base_define + "\n#define MODE_RENDER_DEPTH\n#define MODE_RENDER_SDF\n", false)); // SHADER_VERSION_DEPTH_PASS_WITH_SDF
+			shader_versions.push_back(ShaderRD::VariantDefine(SHADER_GROUP_BASE, base_define + "\n#define MODE_RENDER_DEPTH\n#define MODE_RENDER_VOXEL_HIT\n", true));
+			shader_versions.push_back(ShaderRD::VariantDefine(SHADER_GROUP_BASE, base_define + "\n#define MODE_RENDER_DEPTH\n#define MODE_RENDER_NORMAL_ROUGHNESS\n#define MODE_RENDER_VOXEL_HIT\n", true));
+			shader_versions.push_back(ShaderRD::VariantDefine(SHADER_GROUP_ADVANCED, base_define + "\n#define MODE_RENDER_DEPTH\n#define MODE_RENDER_NORMAL_ROUGHNESS\n#define MODE_RENDER_VOXEL_GI\n#define MODE_RENDER_VOXEL_HIT\n", false));
+			shader_versions.push_back(ShaderRD::VariantDefine(SHADER_GROUP_MULTIVIEW, base_define + "\n#define USE_MULTIVIEW\n#define MODE_RENDER_DEPTH\n#define MODE_RENDER_VOXEL_HIT\n", false));
+			shader_versions.push_back(ShaderRD::VariantDefine(SHADER_GROUP_MULTIVIEW, base_define + "\n#define USE_MULTIVIEW\n#define MODE_RENDER_DEPTH\n#define MODE_RENDER_NORMAL_ROUGHNESS\n#define MODE_RENDER_VOXEL_HIT\n", false));
+			shader_versions.push_back(ShaderRD::VariantDefine(SHADER_GROUP_ADVANCED_MULTIVIEW, base_define + "\n#define USE_MULTIVIEW\n#define MODE_RENDER_DEPTH\n#define MODE_RENDER_NORMAL_ROUGHNESS\n#define MODE_RENDER_VOXEL_GI\n#define MODE_RENDER_VOXEL_HIT\n", false));
 		}
 
 		Vector<String> color_pass_flags = {
@@ -720,6 +768,16 @@ void SceneShaderForwardClustered::init(const String p_defines) {
 		actions.renames["COLOR"] = "color_interp";
 		actions.renames["POINT_SIZE"] = "point_size";
 		actions.renames["INSTANCE_ID"] = "INSTANCE_INDEX";
+		actions.renames["VOXEL_INSTANCE_ID"] = "int(instance_index_interp)";
+		actions.renames["VOXEL_VOLUME_DIMS"] = "instances.data[voxel_current_instance_index].voxel_volume_dims_resource.xyz";
+		actions.renames["VOXEL_BRICK_DIMS"] = "instances.data[voxel_current_instance_index].voxel_brick_dims_neighbor_mask.xyz";
+		actions.renames["VOXEL_ATLAS_BRICK_DIMS"] = "instances.data[voxel_current_instance_index].voxel_atlas_dims_diagonal_mask.xyz";
+		actions.renames["VOXEL_NEIGHBOR_MASK"] = "instances.data[voxel_current_instance_index].voxel_brick_dims_neighbor_mask.w";
+		actions.renames["VOXEL_NEIGHBOR_DIAGONAL_MASK"] = "instances.data[voxel_current_instance_index].voxel_atlas_dims_diagonal_mask.w";
+		actions.renames["VOXEL_VOXEL_SIZE"] = "instances.data[voxel_current_instance_index].voxel_size_pad.x";
+		actions.renames["VOXEL_BATCH_VOXELS"] = "voxel_batch_voxel_textures[nonuniformEXT(instances.data[voxel_current_instance_index].voxel_volume_dims_resource.w)]";
+		actions.renames["VOXEL_BATCH_BRICKS"] = "voxel_batch_brick_textures[nonuniformEXT(instances.data[voxel_current_instance_index].voxel_volume_dims_resource.w)]";
+		actions.renames["VOXEL_BATCH_NEIGHBORS"] = "voxel_batch_neighbor_textures[nonuniformEXT(instances.data[voxel_current_instance_index].voxel_volume_dims_resource.w)]";
 		actions.renames["VERTEX_ID"] = "VERTEX_INDEX";
 		actions.renames["Z_CLIP_SCALE"] = "z_clip_scale";
 
@@ -782,6 +840,12 @@ void SceneShaderForwardClustered::init(const String p_defines) {
 		actions.renames["LIGHTING_VERTEX"] = "lighting_vertex";
 		actions.renames["VOXEL_FACE_LIGHTING"] = "voxel_face_lighting";
 		actions.renames["VOXEL_OCCUPANCY_SHADOWS"] = "voxel_occupancy_shadows";
+		actions.renames["IN_DEPTH_PASS"] = "VOXEL_DEPTH_PASS";
+		actions.renames["VOXEL_HIT_PAYLOAD"] = "voxel_hit_payload";
+		actions.renames["VOXEL_HIT_DEPTH"] = "voxel_hit_depth";
+		actions.renames["VOXEL_HIT_POSITION"] = "voxel_hit_position_data";
+		actions.renames["VOXEL_INV_MODEL_MATRIX"] = "read_inverse_model_matrix";
+		actions.renames["VOXEL_DEPTH"] = "gl_FragDepth";
 
 		actions.renames["NODE_POSITION_WORLD"] = "read_model_matrix[3].xyz";
 		actions.renames["CAMERA_POSITION_WORLD"] = "inv_view_matrix[3].xyz";
@@ -841,6 +905,10 @@ void SceneShaderForwardClustered::init(const String p_defines) {
 		actions.usage_defines["LIGHTING_VERTEX"] = "#define LIGHTING_VERTEX_USED\n";
 		actions.usage_defines["VOXEL_FACE_LIGHTING"] = "#define VOXEL_FACE_LIGHTING_USED\n";
 		actions.usage_defines["VOXEL_OCCUPANCY_SHADOWS"] = "#define VOXEL_OCCUPANCY_SHADOWS_USED\n";
+		actions.usage_defines["VOXEL_HIT_PAYLOAD"] = "#define VOXEL_HIT_PAYLOAD_USED\n";
+		actions.usage_defines["VOXEL_HIT_DEPTH"] = "#define VOXEL_HIT_DEPTH_USED\n";
+		actions.usage_defines["VOXEL_HIT_POSITION"] = "#define VOXEL_HIT_POSITION_USED\n";
+		actions.usage_defines["VOXEL_INV_MODEL_MATRIX"] = "#define VOXEL_INV_MODEL_MATRIX_USED\n";
 		actions.usage_defines["PREMUL_ALPHA_FACTOR"] = "#define PREMUL_ALPHA_USED\n";
 
 		actions.usage_defines["ALPHA_SCISSOR_THRESHOLD"] = "#define ALPHA_SCISSOR_USED\n";

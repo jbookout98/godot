@@ -265,6 +265,42 @@ void VoxelForwardVolumeStorage::_free_world_gpu_resources() {
 	world_occupancy_free_mixed_slots.clear();
 }
 
+bool VoxelForwardVolumeStorage::create_world_occupancy_snapshot(WorldOccupancy &r_snapshot) const {
+	r_snapshot = WorldOccupancy();
+	RD *rd = RD::get_singleton();
+	if (rd == nullptr || !world_occupancy.directory_buffer.is_valid() || !world_occupancy.brick_buffer.is_valid() ||
+			world_occupancy_directory_cpu.is_empty()) {
+		return false;
+	}
+
+	// The CPU mirrors are updated before the live occupancy revision advances.
+	// Uploading both mirrors into private buffers therefore captures one exact
+	// revision without a GPU readback or a race with later incremental writes.
+	PackedByteArray snapshot_brick_bytes = world_occupancy_bricks_cpu;
+	if (snapshot_brick_bytes.is_empty()) {
+		snapshot_brick_bytes.resize(4);
+		snapshot_brick_bytes.fill(0);
+	}
+	const RID snapshot_directory = rd->storage_buffer_create(world_occupancy_directory_cpu.size(), world_occupancy_directory_cpu);
+	const RID snapshot_bricks = rd->storage_buffer_create(snapshot_brick_bytes.size(), snapshot_brick_bytes);
+	if (!snapshot_directory.is_valid() || !snapshot_bricks.is_valid()) {
+		if (snapshot_directory.is_valid()) {
+			rd->free_rid(snapshot_directory);
+		}
+		if (snapshot_bricks.is_valid()) {
+			rd->free_rid(snapshot_bricks);
+		}
+		return false;
+	}
+
+	r_snapshot = world_occupancy;
+	r_snapshot.directory_buffer = snapshot_directory;
+	r_snapshot.brick_buffer = snapshot_bricks;
+	rd->set_resource_name(snapshot_directory, vformat("Voxel World Occupancy Snapshot Directory r%d", world_occupancy.revision));
+	rd->set_resource_name(snapshot_bricks, vformat("Voxel World Occupancy Snapshot Bricks r%d", world_occupancy.revision));
+	return true;
+}
+
 void VoxelForwardVolumeStorage::_request_full_world_rebuild() {
 	pending_incremental_world_bricks.clear();
 	world_occupancy_dirty = true;
@@ -607,7 +643,7 @@ bool VoxelForwardVolumeStorage::_apply_incremental_world_updates() {
 	return true;
 }
 
-void VoxelForwardVolumeStorage::volume_set_on_render_thread(RID p_base, RID p_voxel_texture, RID p_brick_texture, RID p_palette_texture, RID p_material_texture, PackedByteArray p_occupancy_directory, PackedByteArray p_occupancy_bricks, Vector3i p_dimensions, Vector3i p_brick_dimensions, Vector3i p_atlas_brick_dimensions, Transform3D p_transform, float p_voxel_size, int p_occupied_brick_count, Vector3i p_dirty_position, Vector3i p_dirty_size, int64_t p_revision) {
+void VoxelForwardVolumeStorage::volume_set_on_render_thread(RID p_base, RID p_voxel_texture, RID p_brick_texture, RID p_neighbor_texture, RID p_palette_texture, RID p_material_texture, PackedByteArray p_occupancy_directory, PackedByteArray p_occupancy_bricks, Vector3i p_dimensions, Vector3i p_brick_dimensions, Vector3i p_atlas_brick_dimensions, Transform3D p_transform, float p_voxel_size, int p_occupied_brick_count, int p_neighbor_mask, int p_neighbor_diagonal_mask, Vector3i p_dirty_position, Vector3i p_dirty_size, int64_t p_revision) {
 	VoxelForwardVolumeStorage *storage = get_singleton();
 	if (storage == nullptr || !p_base.is_valid()) {
 		return;
@@ -616,10 +652,20 @@ void VoxelForwardVolumeStorage::volume_set_on_render_thread(RID p_base, RID p_vo
 		return;
 	}
 
+	const Volume *previous_volume = storage->volumes.getptr(p_base);
 	Volume volume;
+	if (previous_volume != nullptr) {
+		volume.batch_texture_index = previous_volume->batch_texture_index;
+	} else if (!storage->free_batch_texture_indices.is_empty()) {
+		volume.batch_texture_index = storage->free_batch_texture_indices[storage->free_batch_texture_indices.size() - 1];
+		storage->free_batch_texture_indices.resize(storage->free_batch_texture_indices.size() - 1);
+	} else {
+		ERR_PRINT("Voxel Forward batch texture table is full; this volume cannot use the batched proxy shader.");
+	}
 	volume.base = p_base;
 	volume.voxel_texture = p_voxel_texture;
 	volume.brick_texture = p_brick_texture;
+	volume.neighbor_texture = p_neighbor_texture;
 	volume.palette_texture = p_palette_texture;
 	volume.material_texture = p_material_texture;
 	volume.occupancy_directory_cpu = p_occupancy_directory;
@@ -629,15 +675,47 @@ void VoxelForwardVolumeStorage::volume_set_on_render_thread(RID p_base, RID p_vo
 	volume.brick_dimensions = p_brick_dimensions;
 	volume.atlas_brick_dimensions = p_atlas_brick_dimensions;
 	volume.occupied_brick_count = uint32_t(MAX(0, p_occupied_brick_count));
+	volume.neighbor_mask = uint32_t(MAX(0, p_neighbor_mask));
+	volume.neighbor_diagonal_mask = uint32_t(MAX(0, p_neighbor_diagonal_mask));
 	volume.voxel_size = p_voxel_size;
 	volume.revision = uint64_t(p_revision);
-	const Volume *previous_volume = storage->volumes.getptr(p_base);
 	const bool incremental_change = previous_volume != nullptr ?
 			storage->_queue_incremental_volume_change(*previous_volume, volume, p_dirty_position, p_dirty_size) :
 			storage->_queue_incremental_volume_extent(volume);
 	storage->volumes.insert(p_base, volume);
+	if (volume.batch_texture_index != INVALID_BATCH_TEXTURE_INDEX) {
+		const uint32_t index = volume.batch_texture_index;
+		const bool table_changed = storage->batch_voxel_textures[index] != p_voxel_texture ||
+				storage->batch_brick_textures[index] != p_brick_texture ||
+				storage->batch_neighbor_textures[index] != p_neighbor_texture;
+		storage->batch_voxel_textures.write[index] = p_voxel_texture;
+		storage->batch_brick_textures.write[index] = p_brick_texture;
+		storage->batch_neighbor_textures.write[index] = p_neighbor_texture;
+		storage->batch_texture_revision += table_changed ? 1 : 0;
+	}
 	if (!incremental_change) {
 		storage->_request_full_world_rebuild();
+	}
+}
+
+void VoxelForwardVolumeStorage::volume_neighbors_set_on_render_thread(RID p_base, RID p_neighbor_texture, int p_neighbor_mask, int p_neighbor_diagonal_mask) {
+	VoxelForwardVolumeStorage *storage = get_singleton();
+	if (storage == nullptr) {
+		return;
+	}
+	Volume *volume = storage->volumes.getptr(p_base);
+	if (volume == nullptr) {
+		return;
+	}
+	volume->neighbor_mask = uint32_t(MAX(0, p_neighbor_mask));
+	volume->neighbor_diagonal_mask = uint32_t(MAX(0, p_neighbor_diagonal_mask));
+	if (volume->neighbor_texture == p_neighbor_texture) {
+		return;
+	}
+	volume->neighbor_texture = p_neighbor_texture;
+	if (volume->batch_texture_index != INVALID_BATCH_TEXTURE_INDEX) {
+		storage->batch_neighbor_textures.write[volume->batch_texture_index] = p_neighbor_texture;
+		storage->batch_texture_revision++;
 	}
 }
 
@@ -650,8 +728,21 @@ void VoxelForwardVolumeStorage::volume_transform_set_on_render_thread(RID p_base
 	if (volume == nullptr || volume->transform == p_transform) {
 		return;
 	}
+
+	// Recompose every occupied world brick touched by either transform. The
+	// incremental updater reads the final volume table, so the old extent is
+	// cleared and the new extent is filled deterministically in one revision.
+	// Unsupported rotations/scales, an unavailable table, or an update already
+	// being rebuilt retain the exact full-rebuild fallback.
+	const Volume previous_volume = *volume;
+	Volume transformed_volume = previous_volume;
+	transformed_volume.transform = p_transform;
+	const bool previous_extent_queued = storage->_queue_incremental_volume_extent(previous_volume);
+	const bool transformed_extent_queued = previous_extent_queued && storage->_queue_incremental_volume_extent(transformed_volume);
 	volume->transform = p_transform;
-	storage->_request_full_world_rebuild();
+	if (!transformed_extent_queued) {
+		storage->_request_full_world_rebuild();
+	}
 }
 
 void VoxelForwardVolumeStorage::volume_remove_on_render_thread(RID p_base) {
@@ -662,6 +753,14 @@ void VoxelForwardVolumeStorage::volume_remove_on_render_thread(RID p_base) {
 			return;
 		}
 		const bool incremental_change = storage->_queue_incremental_volume_extent(*previous_volume);
+		if (previous_volume->batch_texture_index != INVALID_BATCH_TEXTURE_INDEX) {
+			const uint32_t index = previous_volume->batch_texture_index;
+			storage->batch_voxel_textures.write[index] = RID();
+			storage->batch_brick_textures.write[index] = RID();
+			storage->batch_neighbor_textures.write[index] = RID();
+			storage->free_batch_texture_indices.push_back(index);
+			storage->batch_texture_revision++;
+		}
 		storage->volumes.erase(p_base);
 		if (!incremental_change) {
 			storage->_request_full_world_rebuild();
@@ -994,6 +1093,13 @@ const VoxelForwardVolumeStorage::Volume *VoxelForwardVolumeStorage::get_volume(R
 VoxelForwardVolumeStorage::VoxelForwardVolumeStorage() {
 	ERR_FAIL_COND(singleton != nullptr);
 	singleton = this;
+	batch_voxel_textures.resize(MAX_BATCH_TEXTURES);
+	batch_brick_textures.resize(MAX_BATCH_TEXTURES);
+	batch_neighbor_textures.resize(MAX_BATCH_TEXTURES);
+	free_batch_texture_indices.resize(MAX_BATCH_TEXTURES);
+	for (uint32_t i = 0; i < MAX_BATCH_TEXTURES; i++) {
+		free_batch_texture_indices.write[i] = MAX_BATCH_TEXTURES - 1u - i;
+	}
 }
 
 VoxelForwardVolumeStorage::~VoxelForwardVolumeStorage() {

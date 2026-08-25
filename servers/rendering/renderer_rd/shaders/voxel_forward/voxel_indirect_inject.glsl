@@ -86,7 +86,7 @@ float shadow_visibility(vec3 world_position) {
 	vec2 atlas_position = (vec2(light_x, light_y) / (2.0 * extent) + vec2(0.5)) * float(resolution) - vec2(0.5);
 	ivec2 texel = clamp(ivec2(round(atlas_position)), ivec2(0), ivec2(resolution - 1));
 	texel.x += cascade * resolution;
-	float receiver_depth = far_extent - dot(relative, normalize(params.light_direction_energy.xyz));
+	float receiver_depth = far_extent - dot(relative, params.light_direction_energy.xyz);
 	float occluder_depth = texelFetch(shadow_atlas, texel, 0).r;
 	return receiver_depth <= occluder_depth + params.light_color_bias.w ? 1.0 : 0.0;
 }
@@ -137,7 +137,7 @@ void main() {
 				}
 			}
 			vec3 surface_normal = -toward_solid;
-			float facing = max(dot(surface_normal, normalize(params.light_direction_energy.xyz)), 0.0);
+			float facing = max(dot(surface_normal, params.light_direction_energy.xyz), 0.0);
 			if (facing > 0.0) {
 				vec3 surface_position = occupied_center + surface_normal * (voxel_size * 0.501);
 				float visibility = shadow_visibility(surface_position);

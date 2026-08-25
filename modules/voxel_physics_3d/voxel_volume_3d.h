@@ -41,6 +41,8 @@ private:
 	Ref<VoxelMaterial> voxel_material;
 	// Private generated material holding Shader and per-volume GPU textures.
 	Ref<VoxelMaterial> runtime_material;
+	String runtime_material_batch_key;
+	bool runtime_material_cached = false;
 	// Mixed bricks are tightly packed into this atlas. Empty and uniform bricks
 	// never allocate voxel payload on the GPU.
 	Ref<ImageTexture3D> mixed_brick_atlas;
@@ -84,12 +86,14 @@ private:
 	void _voxel_material_changed();
 	void _rebuild_volume_textures();
 	void _rebuild_runtime_material();
+	void _release_runtime_material();
+	String _make_runtime_material_batch_key() const;
 	void _rebuild_procedural_surface();
 	void _ensure_shadow_proxy();
 	void _rebuild_shadow_proxy();
 	void _sync_shadow_proxy_instance();
 	void _sync_voxel_forward_volume(bool p_remove = false);
-	void _update_material_bindings();
+	void _update_material_bindings(bool p_sync_volume = true);
 	Ref<ImageTexture3D> _create_texture_3d(
 			const PackedByteArray &p_bytes,
 			const Vector3i &p_dimensions,

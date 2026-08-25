@@ -54,6 +54,7 @@ private:
 	bool metallic_texture_enabled = false;
 	bool specularity_texture_enabled = false;
 	bool emission_texture_enabled = false;
+	bool batched_resources_enabled = false;
 	void _emit_ambient_occlusion_changed();
 	void _rebuild_shader();
 
@@ -109,6 +110,10 @@ public:
 	void set_transparency_enabled(bool p_enabled);
 	bool is_transparency_enabled() const;
 	void set_texture_features(bool p_metallic_enabled, bool p_specularity_enabled, bool p_emission_enabled);
+	// Internal runtime switch. Batched volume resources are selected from the
+	// Forward Clustered scene descriptor table using the current instance row.
+	void set_batched_resources_enabled(bool p_enabled);
+	bool is_batched_resources_enabled() const;
 	// VoxelMaterial is serialized as lightweight configuration. VoxelVolume3D
 	// calls this only on its private runtime copy so generated Shader and 3D
 	// texture resources never become scene subresources.

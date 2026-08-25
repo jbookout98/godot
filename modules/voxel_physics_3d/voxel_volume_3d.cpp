@@ -10,6 +10,26 @@
 #include "servers/rendering/rendering_server_types.h"
 #include "voxel_volume_streaming_manager.h"
 
+namespace {
+
+struct VoxelRuntimeMaterialCacheEntry {
+	Ref<VoxelMaterial> material;
+	uint32_t users = 0;
+};
+
+HashMap<String, VoxelRuntimeMaterialCacheEntry> voxel_runtime_material_cache;
+
+uint64_t _texture_identity(const Ref<Texture2D> &p_texture) {
+	return p_texture.is_valid() ? uint64_t(p_texture->get_instance_id()) : 0;
+}
+
+int64_t _quantized_absolute_rotation(real_t p_angle) {
+	// 1e-5 radians is deterministic and far below a visible orientation change.
+	return int64_t(Math::round(Math::abs(Math::wrapf(p_angle, real_t(-Math::PI), real_t(Math::PI))) * real_t(100000.0)));
+}
+
+} // namespace
+
 static bool _uses_shadow_proxy() {
 	return !RenderingMethod::is_current_voxel_forward_method() &&
 			bool(GLOBAL_GET("rendering/voxel_volume/shadow_proxy/enabled"));
@@ -383,7 +403,7 @@ void VoxelVolume3D::_rebuild_shadow_proxy() {
 	_sync_shadow_proxy_instance();
 }
 
-void VoxelVolume3D::_update_material_bindings() {
+void VoxelVolume3D::_update_material_bindings(bool p_sync_volume) {
 	if (!streaming_resident || voxel_data.is_null() || runtime_material.is_null()) {
 		return;
 	}
@@ -406,13 +426,15 @@ void VoxelVolume3D::_update_material_bindings() {
 			(dimensions.x + 7) / 8,
 			(dimensions.y + 7) / 8,
 			(dimensions.z + 7) / 8);
-	runtime_material->set_shader_parameter("u_voxels", mixed_brick_atlas);
-	runtime_material->set_shader_parameter("u_bricks", brick_directory_texture);
-	runtime_material->set_shader_parameter(
-			"u_neighbor_faces",
-			neighbor_face_texture.is_valid() ? neighbor_face_texture : fallback_neighbor_face_texture);
-	runtime_material->set_shader_parameter("u_neighbor_mask", neighbor_mask);
-	runtime_material->set_shader_parameter("u_neighbor_diagonal_mask", neighbor_diagonal_mask);
+	if (!runtime_material->is_batched_resources_enabled()) {
+		runtime_material->set_shader_parameter("u_voxels", mixed_brick_atlas);
+		runtime_material->set_shader_parameter("u_bricks", brick_directory_texture);
+		runtime_material->set_shader_parameter(
+				"u_neighbor_faces",
+				neighbor_face_texture.is_valid() ? neighbor_face_texture : fallback_neighbor_face_texture);
+		runtime_material->set_shader_parameter("u_neighbor_mask", neighbor_mask);
+		runtime_material->set_shader_parameter("u_neighbor_diagonal_mask", neighbor_diagonal_mask);
+	}
 	runtime_material->set_shader_parameter(
 			"u_palette",
 			palette.is_valid() ? palette : fallback_palette);
@@ -423,13 +445,15 @@ void VoxelVolume3D::_update_material_bindings() {
 	if (has_specularity) runtime_material->set_shader_parameter("u_specularity", specularity);
 	if (has_emission) runtime_material->set_shader_parameter("u_emission", emission);
 	if (has_transparency) runtime_material->set_shader_parameter("u_transparency", transparency_texture);
-	runtime_material->set_shader_parameter("u_volume_dims", dimensions);
-	runtime_material->set_shader_parameter("u_brick_dims", brick_dimensions);
-	runtime_material->set_shader_parameter("u_atlas_brick_dims", atlas_brick_dimensions);
-	runtime_material->set_shader_parameter(
-			"u_volume_size", Vector3(dimensions) * voxel_data->get_voxel_size());
-	runtime_material->set_shader_parameter("u_voxel_size", voxel_data->get_voxel_size());
-	_sync_voxel_forward_volume();
+	if (!runtime_material->is_batched_resources_enabled()) {
+		runtime_material->set_shader_parameter("u_volume_dims", dimensions);
+		runtime_material->set_shader_parameter("u_brick_dims", brick_dimensions);
+		runtime_material->set_shader_parameter("u_atlas_brick_dims", atlas_brick_dimensions);
+		runtime_material->set_shader_parameter("u_voxel_size", voxel_data->get_voxel_size());
+	}
+	if (p_sync_volume) {
+		_sync_voxel_forward_volume();
+	}
 }
 
 void VoxelVolume3D::_sync_voxel_forward_volume(bool p_remove) {
@@ -456,6 +480,7 @@ void VoxelVolume3D::_sync_voxel_forward_volume(bool p_remove) {
 	const Ref<Texture2D> material_texture = voxel_material.is_valid() && voxel_material->get_material_texture().is_valid() ? voxel_material->get_material_texture() : voxel_data->get_material_texture();
 	const RID palette = palette_texture.is_valid() ? palette_texture->get_rid() : fallback_palette->get_rid();
 	const RID material = material_texture.is_valid() ? material_texture->get_rid() : fallback_material->get_rid();
+	const RID neighbor = neighbor_face_texture.is_valid() ? neighbor_face_texture->get_rid() : fallback_neighbor_face_texture->get_rid();
 	const VoxelBrickStorage &storage = voxel_data->get_brick_storage();
 	PackedByteArray occupancy_directory;
 	occupancy_directory.resize(storage.get_brick_count() * sizeof(uint32_t));
@@ -499,6 +524,7 @@ void VoxelVolume3D::_sync_voxel_forward_volume(bool p_remove) {
 			procedural_surface,
 			mixed_brick_atlas->get_rid(),
 			brick_directory_texture->get_rid(),
+			neighbor,
 			palette,
 			material,
 			occupancy_directory,
@@ -509,19 +535,72 @@ void VoxelVolume3D::_sync_voxel_forward_volume(bool p_remove) {
 			is_inside_tree() ? get_global_transform() : get_transform(),
 			float(voxel_data->get_voxel_size()),
 			occupied_brick_count,
+			neighbor_mask,
+			neighbor_diagonal_mask,
 			voxel_forward_dirty_valid ? voxel_forward_dirty_position : Vector3i(),
 			voxel_forward_dirty_valid ? voxel_forward_dirty_size : Vector3i(),
 			int64_t(voxel_data->get_revision())));
 	voxel_forward_dirty_valid = false;
 }
 
-void VoxelVolume3D::_rebuild_runtime_material() {
-	// The authored VoxelMaterial is intentionally shared between volumes, just
-	// like a StandardMaterial3D resource. Keep only the generated shader and the
-	// volume-specific texture bindings private.
-	if (runtime_material.is_null()) {
-		runtime_material.instantiate();
+String VoxelVolume3D::_make_runtime_material_batch_key() const {
+	if (!RenderingMethod::is_current_voxel_forward_method() || voxel_data.is_null()) {
+		return String();
 	}
+	const Ref<Texture2D> palette = voxel_material.is_valid() && voxel_material->get_palette_texture().is_valid() ? voxel_material->get_palette_texture() : voxel_data->get_palette_texture();
+	const Ref<Texture2D> material = voxel_material.is_valid() && voxel_material->get_material_texture().is_valid() ? voxel_material->get_material_texture() : voxel_data->get_material_texture();
+	const Ref<Texture2D> metallic = voxel_material.is_valid() && voxel_material->get_metallic_texture().is_valid() ? voxel_material->get_metallic_texture() : voxel_data->get_metallic_texture();
+	const Ref<Texture2D> transparency_texture = voxel_material.is_valid() && voxel_material->get_transparency_texture().is_valid() ? voxel_material->get_transparency_texture() : voxel_data->get_transparency_texture();
+	const Ref<Texture2D> specularity = voxel_material.is_valid() && voxel_material->get_specularity_texture().is_valid() ? voxel_material->get_specularity_texture() : voxel_data->get_specularity_texture();
+	const Ref<Texture2D> emission = voxel_material.is_valid() && voxel_material->get_emission_texture().is_valid() ? voxel_material->get_emission_texture() : voxel_data->get_emission_texture();
+	const Transform3D transform = is_inside_tree() ? get_global_transform() : get_transform();
+	const Vector3 rotation = transform.basis.orthonormalized().get_euler();
+	return vformat("%d:%d:%d:%d:%d:%d:%d:%d:%d:%d",
+			voxel_material.is_valid() ? uint64_t(voxel_material->get_instance_id()) : 0,
+			_texture_identity(palette), _texture_identity(material), _texture_identity(metallic),
+			_texture_identity(transparency_texture), _texture_identity(specularity), _texture_identity(emission),
+			_quantized_absolute_rotation(rotation.x), _quantized_absolute_rotation(rotation.y), _quantized_absolute_rotation(rotation.z));
+}
+
+void VoxelVolume3D::_release_runtime_material() {
+	if (runtime_material_cached) {
+		VoxelRuntimeMaterialCacheEntry *entry = voxel_runtime_material_cache.getptr(runtime_material_batch_key);
+		if (entry != nullptr) {
+			entry->users--;
+			if (entry->users == 0) {
+				voxel_runtime_material_cache.erase(runtime_material_batch_key);
+			}
+		}
+	}
+	runtime_material_cached = false;
+	runtime_material_batch_key = String();
+	runtime_material.unref();
+}
+
+void VoxelVolume3D::_rebuild_runtime_material() {
+	_ensure_fallback_textures();
+	const String requested_batch_key = _make_runtime_material_batch_key();
+	if (runtime_material.is_null() || requested_batch_key != runtime_material_batch_key) {
+		_release_runtime_material();
+		if (!requested_batch_key.is_empty()) {
+			VoxelRuntimeMaterialCacheEntry *entry = voxel_runtime_material_cache.getptr(requested_batch_key);
+			if (entry == nullptr) {
+				VoxelRuntimeMaterialCacheEntry new_entry;
+				new_entry.material.instantiate();
+				new_entry.users = 1;
+				voxel_runtime_material_cache.insert(requested_batch_key, new_entry);
+				runtime_material = new_entry.material;
+			} else {
+				entry->users++;
+				runtime_material = entry->material;
+			}
+			runtime_material_batch_key = requested_batch_key;
+			runtime_material_cached = true;
+		} else {
+			runtime_material.instantiate();
+		}
+	}
+	runtime_material->set_batched_resources_enabled(!requested_batch_key.is_empty());
 	if (voxel_material.is_valid()) {
 		runtime_material->set_shading_mode(voxel_material->get_shading_mode());
 		runtime_material->set_lighting_position_mode(voxel_material->get_lighting_position_mode());
@@ -625,7 +704,7 @@ void VoxelVolume3D::_voxel_data_voxels_changed(const Vector3i &p_position, const
 
 void VoxelVolume3D::_voxel_material_changed() {
 	if (!streaming_resident) {
-		runtime_material.unref();
+		_release_runtime_material();
 		return;
 	}
 	if (voxel_material.is_valid() && runtime_material.is_valid() && voxel_material->is_ambient_occlusion_change_in_progress()) {
@@ -938,7 +1017,7 @@ void VoxelVolume3D::update_neighbor_faces(VoxelVolume3D *const p_neighbors[NEIGH
 	// Only the neighbor uniforms changed. A full material rebind would also repack
 	// and resend the much larger world-occupancy payload even though neither the
 	// volume voxels nor its transform changed.
-	if (runtime_material.is_valid()) {
+	if (runtime_material.is_valid() && !runtime_material->is_batched_resources_enabled()) {
 		_ensure_fallback_textures();
 		const RID current_neighbor_texture = neighbor_face_texture.is_valid() ? neighbor_face_texture->get_rid() : RID();
 		if (current_neighbor_texture != previous_neighbor_texture) {
@@ -948,6 +1027,11 @@ void VoxelVolume3D::update_neighbor_faces(VoxelVolume3D *const p_neighbors[NEIGH
 		}
 		runtime_material->set_shader_parameter("u_neighbor_mask", neighbor_mask);
 		runtime_material->set_shader_parameter("u_neighbor_diagonal_mask", neighbor_diagonal_mask);
+	}
+	if (procedural_surface.is_valid() && RendererSceneRenderImplementation::VoxelForwardVolumeStorage::get_singleton() != nullptr) {
+		_ensure_fallback_textures();
+		const RID neighbor = neighbor_face_texture.is_valid() ? neighbor_face_texture->get_rid() : fallback_neighbor_face_texture->get_rid();
+		RenderingServer::get_singleton()->call_on_render_thread(callable_mp_static(&RendererSceneRenderImplementation::VoxelForwardVolumeStorage::volume_neighbors_set_on_render_thread).bind(procedural_surface, neighbor, neighbor_mask, neighbor_diagonal_mask));
 	}
 }
 
@@ -991,6 +1075,12 @@ void VoxelVolume3D::_notification(int p_what) {
 			set_cast_shadows_setting((_uses_voxel_forward_shadow_mask() || _uses_shadow_proxy()) ? SHADOW_CASTING_SETTING_OFF : SHADOW_CASTING_SETTING_ON);
 		}
 		_sync_shadow_proxy_instance();
+		const String requested_batch_key = _make_runtime_material_batch_key();
+		if (streaming_resident && requested_batch_key != runtime_material_batch_key) {
+			_rebuild_runtime_material();
+			_update_material_bindings(false);
+			_rebuild_procedural_surface();
+		}
 		if (is_inside_tree() && streaming_resident && procedural_surface.is_valid() && RendererSceneRenderImplementation::VoxelForwardVolumeStorage::get_singleton() != nullptr) {
 			RenderingServer::get_singleton()->call_on_render_thread(callable_mp_static(&RendererSceneRenderImplementation::VoxelForwardVolumeStorage::volume_transform_set_on_render_thread).bind(procedural_surface, get_global_transform()));
 		}
@@ -1021,7 +1111,7 @@ void VoxelVolume3D::set_voxel_material(const Ref<VoxelMaterial> &p_material) {
 		_update_material_bindings();
 		_rebuild_procedural_surface();
 	} else {
-		runtime_material.unref();
+		_release_runtime_material();
 	}
 }
 
@@ -1047,6 +1137,7 @@ VoxelVolume3D::VoxelVolume3D() {
 
 VoxelVolume3D::~VoxelVolume3D() {
 	_sync_voxel_forward_volume(true);
+	_release_runtime_material();
 	if (voxel_data.is_valid()) {
 		voxel_data->disconnect_changed(callable_mp(this, &VoxelVolume3D::_voxel_data_changed));
 		voxel_data->disconnect(SNAME("voxels_changed"), callable_mp(this, &VoxelVolume3D::_voxel_data_voxels_changed));
