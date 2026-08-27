@@ -144,6 +144,14 @@ RenderVoxelForward::~RenderVoxelForward() {
 		}
 		visibility_shader.version_free(visibility_shader_version);
 	}
+	if (outline_resources_initialized) {
+		for (uint32_t samples = 0; samples < RD::TEXTURE_SAMPLES_MAX; samples++) {
+			for (uint32_t attachment = 0; attachment < 3; attachment++) {
+				outline_pipelines[samples][attachment].clear();
+			}
+		}
+		outline_shader.version_free(outline_shader_version);
+	}
 }
 
 void RenderVoxelForward::_ensure_visibility_resources() {
@@ -166,6 +174,45 @@ void RenderVoxelForward::_ensure_visibility_resources() {
 		visibility_pipelines[i].setup(shader, RD::RENDER_PRIMITIVE_TRIANGLES, RD::PipelineRasterizationState(), RD::PipelineMultisampleState(), depth_stencil, RD::PipelineColorBlendState::create_disabled(3), 0);
 	}
 	visibility_resources_initialized = true;
+}
+
+void RenderVoxelForward::_ensure_outline_resources() {
+	if (outline_resources_initialized) {
+		return;
+	}
+	Vector<String> modes;
+	modes.push_back("");
+	Vector<uint64_t> dynamic_buffers;
+	dynamic_buffers.push_back(ShaderRD::DynamicBuffer::encode(0, 2));
+	outline_shader.initialize(modes, String(), Vector<RD::PipelineImmutableSampler>(), dynamic_buffers);
+	outline_shader_version = outline_shader.version_create();
+	RID shader = outline_shader.version_get_shader(outline_shader_version, 0);
+
+	RD::PipelineColorBlendState blend_state;
+	RD::PipelineColorBlendState::Attachment color_blend;
+	color_blend.enable_blend = true;
+	color_blend.src_color_blend_factor = RD::BLEND_FACTOR_SRC_ALPHA;
+	color_blend.dst_color_blend_factor = RD::BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+	color_blend.src_alpha_blend_factor = RD::BLEND_FACTOR_ONE;
+	color_blend.dst_alpha_blend_factor = RD::BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+	blend_state.attachments.push_back(color_blend);
+	for (uint32_t attachment = 1; attachment < 3; attachment++) {
+		RD::PipelineColorBlendState::Attachment disabled;
+		disabled.write_r = false;
+		disabled.write_g = false;
+		disabled.write_b = false;
+		disabled.write_a = false;
+		blend_state.attachments.push_back(disabled);
+	}
+
+	for (uint32_t samples = 0; samples < RD::TEXTURE_SAMPLES_MAX; samples++) {
+		RD::PipelineMultisampleState multisample;
+		multisample.sample_count = RD::TextureSamples(samples);
+		for (uint32_t attachment = 0; attachment < 3; attachment++) {
+			outline_pipelines[samples][attachment].setup(shader, RD::RENDER_PRIMITIVE_TRIANGLES, RD::PipelineRasterizationState(), multisample, RD::PipelineDepthStencilState(), blend_state, 0);
+		}
+	}
+	outline_resources_initialized = true;
 }
 
 void RenderVoxelForward::_free_voxel_reflections() {
@@ -221,11 +268,13 @@ void RenderVoxelForward::_free_indirect_light() {
 		indirect_staging_active[cascade] = false;
 		indirect_staging_injected[cascade] = false;
 		indirect_staging_partial[cascade] = false;
+		indirect_staging_detected_frame[cascade] = 0;
 		indirect_staging_next_step[cascade] = 0;
 		indirect_blend_active[cascade] = false;
 		indirect_blend_has_history[cascade] = false;
 		indirect_blend_step[cascade] = 0;
 		indirect_blend_frame_count[cascade] = 0;
+		indirect_blend_detected_frame[cascade] = 0;
 		indirect_active_converged[cascade] = false;
 		indirect_active_definition[cascade] = IndirectCascadeDefinition();
 		indirect_staging_definition[cascade] = IndirectCascadeDefinition();
@@ -235,6 +284,16 @@ void RenderVoxelForward::_free_indirect_light() {
 	indirect_world_revision = UINT64_MAX;
 	indirect_schedule_cursor = 0;
 	indirect_blend_schedule_cursor = 0;
+	indirect_staging_batch_classified = false;
+	indirect_staging_batch_low_latency = false;
+	indirect_staging_dirty_cell_count = 0;
+	indirect_staging_cell_pass_workload = 0;
+	indirect_staging_dispatch_count = 0;
+	indirect_render_frame_index = 0;
+	indirect_staging_batch_detected_frame = 0;
+	indirect_low_latency_update_count = 0;
+	indirect_temporal_update_count = 0;
+	indirect_last_publication_frames = 0;
 }
 
 void RenderVoxelForward::_release_indirect_light_snapshot() {
@@ -313,6 +372,7 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 		_release_indirect_light_snapshot();
 		return;
 	}
+	indirect_render_frame_index++;
 
 	const uint32_t resolution = uint32_t(CLAMP(int(GLOBAL_GET("rendering/voxel_forward/indirect_light/resolution")), 24, 96));
 	const float near_cell_size = MAX(world.voxel_size, float(GLOBAL_GET("rendering/voxel_forward/indirect_light/near_cell_size")));
@@ -325,6 +385,8 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 	const float propagation_decay = CLAMP(float(GLOBAL_GET("rendering/voxel_forward/indirect_light/propagation_decay")), 0.0f, 0.99f);
 	const float shadow_bias = MAX(0.0f, float(GLOBAL_GET("rendering/voxel_forward/indirect_light/shadow_bias_voxels"))) * world.voxel_size;
 	const bool dirty_updates_enabled = bool(GLOBAL_GET("rendering/voxel_forward/indirect_light/dirty_updates_enabled"));
+	const bool low_latency_dirty_updates_enabled = bool(GLOBAL_GET("rendering/voxel_forward/indirect_light/low_latency_dirty_updates_enabled"));
+	const uint64_t dirty_cell_pass_budget = uint64_t(MAX(1, int(GLOBAL_GET("rendering/voxel_forward/indirect_light/dirty_cell_pass_budget_per_frame"))));
 	const bool temporal_updates_enabled = bool(GLOBAL_GET("rendering/voxel_forward/indirect_light/temporal_updates_enabled"));
 	const bool temporal_blend_enabled = bool(GLOBAL_GET("rendering/voxel_forward/indirect_light/temporal_blend_enabled")) && indirect_blend_pipeline.is_valid();
 	const uint32_t temporal_blend_frames = uint32_t(CLAMP(int(GLOBAL_GET("rendering/voxel_forward/indirect_light/temporal_blend_frames")), 1, 60));
@@ -417,7 +479,15 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 			indirect_active_definition[cascade] = IndirectCascadeDefinition();
 			indirect_staging_definition[cascade] = IndirectCascadeDefinition();
 			indirect_blend_definition[cascade] = IndirectCascadeDefinition();
+			indirect_staging_detected_frame[cascade] = 0;
+			indirect_blend_detected_frame[cascade] = 0;
 		}
+		indirect_staging_batch_classified = false;
+		indirect_staging_batch_low_latency = false;
+		indirect_staging_dirty_cell_count = 0;
+		indirect_staging_cell_pass_workload = 0;
+		indirect_staging_dispatch_count = 0;
+		indirect_staging_batch_detected_frame = 0;
 		indirect_grid_resolution = resolution;
 		material_storage->global_shader_parameter_set_override(SNAME("voxel_forward_indirect_near"), indirect_grid_texture[0]);
 		material_storage->global_shader_parameter_set_override(SNAME("voxel_forward_indirect_far"), indirect_grid_texture[1]);
@@ -448,6 +518,12 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 	}
 	if (!staging_batch_active) {
 		_release_indirect_light_snapshot();
+		indirect_staging_batch_classified = false;
+		indirect_staging_batch_low_latency = false;
+		indirect_staging_dirty_cell_count = 0;
+		indirect_staging_cell_pass_workload = 0;
+		indirect_staging_dispatch_count = 0;
+		indirect_staging_batch_detected_frame = 0;
 	}
 
 	for (uint32_t cascade = 0; cascade < INDIRECT_CASCADE_COUNT; cascade++) {
@@ -548,23 +624,67 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 		indirect_staging_active[cascade] = true;
 		indirect_staging_injected[cascade] = false;
 		indirect_staging_partial[cascade] = partial_update;
+		indirect_staging_detected_frame[cascade] = indirect_render_frame_index;
 	}
 
 	bool has_staging_work = false;
 	for (uint32_t cascade = 0; cascade < INDIRECT_CASCADE_COUNT; cascade++) {
 		has_staging_work = has_staging_work || indirect_staging_active[cascade];
 	}
+	if (has_staging_work && !indirect_staging_batch_classified) {
+		bool all_pending_work_is_partial = true;
+		uint64_t dirty_cell_count = 0;
+		uint64_t cell_pass_workload = 0;
+		for (uint32_t cascade = 0; cascade < INDIRECT_CASCADE_COUNT; cascade++) {
+			if (indirect_blend_active[cascade]) {
+				all_pending_work_is_partial = false;
+			}
+			if (!indirect_staging_active[cascade]) {
+				continue;
+			}
+			all_pending_work_is_partial = all_pending_work_is_partial && indirect_staging_partial[cascade];
+			const Vector3i &dirty_size = indirect_staging_dispatch_size[cascade];
+			const uint64_t cascade_cell_count = uint64_t(dirty_size.x) * uint64_t(dirty_size.y) * uint64_t(dirty_size.z);
+			const uint32_t remaining_injection_passes = indirect_staging_injected[cascade] ? 0u : 1u;
+			const uint32_t remaining_propagation_passes = uint32_t(indirect_staging_definition[cascade].propagation_steps) - indirect_staging_next_step[cascade];
+			dirty_cell_count += cascade_cell_count;
+			cell_pass_workload += cascade_cell_count * uint64_t(remaining_injection_passes + remaining_propagation_passes);
+		}
+		indirect_staging_batch_classified = true;
+		indirect_staging_batch_low_latency = low_latency_dirty_updates_enabled && all_pending_work_is_partial && cell_pass_workload <= dirty_cell_pass_budget;
+		indirect_staging_dirty_cell_count = dirty_cell_count;
+		indirect_staging_cell_pass_workload = cell_pass_workload;
+		indirect_staging_dispatch_count = 0;
+		indirect_staging_batch_detected_frame = indirect_render_frame_index;
+	}
+
+	uint32_t remaining_staging_dispatches = 0;
+	if (indirect_staging_batch_low_latency) {
+		for (uint32_t cascade = 0; cascade < INDIRECT_CASCADE_COUNT; cascade++) {
+			if (!indirect_staging_active[cascade]) {
+				continue;
+			}
+			remaining_staging_dispatches += indirect_staging_injected[cascade] ? 0u : 1u;
+			remaining_staging_dispatches += uint32_t(indirect_staging_definition[cascade].propagation_steps) - indirect_staging_next_step[cascade];
+		}
+	}
+	uint32_t staging_dispatch_limit = indirect_staging_batch_low_latency ? remaining_staging_dispatches : dispatch_budget;
 	uint32_t staging_dispatched = 0;
 	if (has_staging_work) {
-		RENDER_TIMESTAMP("Voxel Indirect Light");
-		RD::get_singleton()->draw_command_begin_label("Voxel Indirect Light");
+		if (indirect_staging_batch_low_latency) {
+			RENDER_TIMESTAMP("Indirect Dirty Low-Latency Update");
+			RD::get_singleton()->draw_command_begin_label("Indirect Dirty Low-Latency Update");
+		} else {
+			RENDER_TIMESTAMP("Voxel Indirect Light");
+			RD::get_singleton()->draw_command_begin_label("Voxel Indirect Light");
+		}
 		// Injection and propagation own this budget. Temporal blending is a much
 		// cheaper copy-like pass and has a separate bounded budget below, so a
 		// completed cascade can no longer stall all remaining cascade generation.
-		while (staging_dispatched < dispatch_budget) {
+		while (staging_dispatched < staging_dispatch_limit) {
 			uint32_t cascade = INDIRECT_CASCADE_COUNT;
 			for (uint32_t probe = 0; probe < INDIRECT_CASCADE_COUNT; probe++) {
-				const uint32_t candidate = (indirect_schedule_cursor + probe) % INDIRECT_CASCADE_COUNT;
+				const uint32_t candidate = indirect_staging_batch_low_latency ? probe : (indirect_schedule_cursor + probe) % INDIRECT_CASCADE_COUNT;
 				if (indirect_staging_active[candidate]) {
 					cascade = candidate;
 					break;
@@ -573,7 +693,9 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 			if (cascade == INDIRECT_CASCADE_COUNT) {
 				break;
 			}
-			indirect_schedule_cursor = (cascade + 1u) % INDIRECT_CASCADE_COUNT;
+			if (!indirect_staging_batch_low_latency) {
+				indirect_schedule_cursor = (cascade + 1u) % INDIRECT_CASCADE_COUNT;
+			}
 			const IndirectCascadeDefinition &build = indirect_staging_definition[cascade];
 			const VoxelForwardVolumeStorage::WorldOccupancy &build_world = indirect_staging_world_owned ? indirect_staging_world : world;
 			Vector3i dispatch_origin = indirect_staging_dispatch_origin[cascade];
@@ -585,6 +707,18 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 					const Error copy_0 = RD::get_singleton()->texture_copy(indirect_grid_rd[cascade][0], indirect_staging_grid_rd[cascade][0], Vector3(), Vector3(), copy_size, 0, 0, 0, 0);
 					const Error copy_1 = RD::get_singleton()->texture_copy(indirect_grid_rd[cascade][0], indirect_staging_grid_rd[cascade][1], Vector3(), Vector3(), copy_size, 0, 0, 0, 0);
 					if (copy_0 != OK || copy_1 != OK) {
+						if (indirect_staging_batch_low_latency) {
+							// A failed history seed promotes this cascade to a full-grid
+							// rebuild. Keep that fallback on the ordinary bounded path.
+							const Vector3i &partial_size = indirect_staging_dispatch_size[cascade];
+							const uint64_t partial_cells = uint64_t(partial_size.x) * uint64_t(partial_size.y) * uint64_t(partial_size.z);
+							const uint64_t full_cells = uint64_t(resolution) * uint64_t(resolution) * uint64_t(resolution);
+							const uint32_t remaining_passes = 1u + uint32_t(indirect_staging_definition[cascade].propagation_steps) - indirect_staging_next_step[cascade];
+							indirect_staging_dirty_cell_count += full_cells - partial_cells;
+							indirect_staging_cell_pass_workload += (full_cells - partial_cells) * uint64_t(remaining_passes);
+							indirect_staging_batch_low_latency = false;
+							staging_dispatch_limit = staging_dispatched + dispatch_budget;
+						}
 						indirect_staging_partial[cascade] = false;
 						dispatch_origin = Vector3i();
 						dispatch_size = Vector3i(resolution, resolution, resolution);
@@ -645,6 +779,7 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 				RD::get_singleton()->draw_command_end_label();
 				indirect_staging_injected[cascade] = true;
 				staging_dispatched++;
+				indirect_staging_dispatch_count++;
 				continue;
 			}
 
@@ -685,6 +820,7 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 			RD::get_singleton()->draw_command_end_label();
 			indirect_staging_next_step[cascade]++;
 			staging_dispatched++;
+			indirect_staging_dispatch_count++;
 
 			if (indirect_staging_next_step[cascade] == uint32_t(build.propagation_steps)) {
 				// Every configured cascade pass count is even. The completed result is
@@ -692,7 +828,7 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 				const String publish_label = vformat("Indirect Cascade Publish (%s)", cascade_names[cascade]);
 				RENDER_TIMESTAMP(publish_label);
 				RD::get_singleton()->draw_command_begin_label(publish_label.utf8().span());
-				if (temporal_blend_enabled && temporal_blend_frames > 1u) {
+				if (temporal_blend_enabled && temporal_blend_frames > 1u && !indirect_staging_batch_low_latency) {
 					// The staging result is complete and immutable. Blend only its
 					// updated region; all other active texels remain untouched.
 					indirect_blend_definition[cascade] = build;
@@ -703,6 +839,7 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 					indirect_blend_step[cascade] = 0;
 					indirect_blend_frame_count[cascade] = temporal_blend_frames;
 					indirect_blend_has_history[cascade] = indirect_cascade_initialized[cascade];
+					indirect_blend_detected_frame[cascade] = indirect_staging_detected_frame[cascade];
 					indirect_blend_active[cascade] = true;
 					indirect_staging_active[cascade] = false;
 					indirect_staging_injected[cascade] = false;
@@ -715,17 +852,22 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 					const Error publish_error = RD::get_singleton()->texture_copy(indirect_staging_grid_rd[cascade][0], indirect_grid_rd[cascade][0], copy_origin, copy_origin, copy_size, 0, 0, 0, 0);
 					RD::get_singleton()->draw_command_end_label();
 					if (publish_error == OK) {
-					indirect_active_definition[cascade] = build;
-					indirect_grid_origin[cascade] = build.origin;
-					indirect_grid_cell_size[cascade] = build.cell_size;
-					indirect_cascade_initialized[cascade] = true;
-					indirect_active_converged[cascade] = true;
-					indirect_staging_active[cascade] = false;
-					indirect_staging_injected[cascade] = false;
+						indirect_active_definition[cascade] = build;
+						indirect_grid_origin[cascade] = build.origin;
+						indirect_grid_cell_size[cascade] = build.cell_size;
+						indirect_cascade_initialized[cascade] = true;
+						indirect_active_converged[cascade] = true;
+						indirect_staging_active[cascade] = false;
+						indirect_staging_injected[cascade] = false;
+						if (!indirect_staging_batch_low_latency) {
+							indirect_temporal_update_count++;
+							indirect_last_publication_frames = uint32_t(indirect_render_frame_index - indirect_staging_detected_frame[cascade] + 1u);
+							print_verbose(vformat("Voxel Forward indirect temporal cascade publication #%d (%s): %d frame(s) from detection to publication.", indirect_temporal_update_count, cascade_names[cascade], indirect_last_publication_frames));
+						}
 					} else {
-					// Re-run only the deterministic final pass before retrying publish.
-					// This avoids ever advancing beyond the configured even pass count.
-					indirect_staging_next_step[cascade]--;
+						// Re-run only the deterministic final pass before retrying publish.
+						// This avoids ever advancing beyond the configured even pass count.
+						indirect_staging_next_step[cascade]--;
 					}
 				}
 			}
@@ -738,6 +880,19 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 	}
 	if (!staging_work_remaining) {
 		_release_indirect_light_snapshot();
+		if (indirect_staging_batch_classified) {
+			indirect_last_publication_frames = uint32_t(indirect_render_frame_index - indirect_staging_batch_detected_frame + 1u);
+			if (indirect_staging_batch_low_latency) {
+				indirect_low_latency_update_count++;
+				print_verbose(vformat("Voxel Forward indirect low-latency update #%d: %d dirty cells, %d cell-passes, %d dispatches, %d frame(s) to publication.", indirect_low_latency_update_count, indirect_staging_dirty_cell_count, indirect_staging_cell_pass_workload, indirect_staging_dispatch_count, indirect_last_publication_frames));
+			}
+			indirect_staging_batch_classified = false;
+			indirect_staging_batch_low_latency = false;
+			indirect_staging_dirty_cell_count = 0;
+			indirect_staging_cell_pass_workload = 0;
+			indirect_staging_dispatch_count = 0;
+			indirect_staging_batch_detected_frame = 0;
+		}
 	}
 
 	// Publishing is a compute-side history operation. The fragment shader keeps
@@ -833,6 +988,9 @@ void RenderVoxelForward::_render_indirect_light(const RenderDataRD *p_render_dat
 		if (indirect_blend_step[cascade] >= frame_count) {
 			indirect_blend_active[cascade] = false;
 			indirect_active_converged[cascade] = true;
+			indirect_temporal_update_count++;
+			indirect_last_publication_frames = uint32_t(indirect_render_frame_index - indirect_blend_detected_frame[cascade] + 1u);
+			print_verbose(vformat("Voxel Forward indirect temporal cascade publication #%d (%s): %d frame(s) from detection to publication.", indirect_temporal_update_count, cascade_names[cascade], indirect_last_publication_frames));
 		}
 	}
 
@@ -1168,6 +1326,9 @@ void RenderVoxelForward::_fill_voxel_instance_data(RID p_base, VoxelInstanceData
 	r_instance_data.brick_dims_neighbor_mask[3] = int32_t(volume->neighbor_mask);
 	r_instance_data.atlas_dims_diagonal_mask[3] = int32_t(volume->neighbor_diagonal_mask);
 	r_instance_data.voxel_size_pad[0] = volume->voxel_size;
+	r_instance_data.voxel_size_pad[1] = volume->outline_width;
+	static_assert(sizeof(volume->outline_color_rgba8) == sizeof(r_instance_data.voxel_size_pad[2]));
+	memcpy(&r_instance_data.voxel_size_pad[2], &volume->outline_color_rgba8, sizeof(volume->outline_color_rgba8));
 }
 
 bool RenderVoxelForward::_render_scene_custom_uses_resolved_depth() const {
@@ -2103,8 +2264,71 @@ void RenderVoxelForward::_render_buffers_debug_draw(const RenderDataRD *p_render
 	copy_effects->copy_to_fb_rect(render_buffers->get_texture(scope, texture_name), texture_storage->render_target_get_rd_framebuffer(render_target), Rect2i(Point2i(), target_size), false, true, false, false, RID(), false, true);
 }
 
+void RenderVoxelForward::_render_voxel_outline(RenderDataRD *p_render_data, RID p_framebuffer, uint32_t p_color_attachment_count) {
+	if (!bool(GLOBAL_GET("rendering/voxel_forward/outline/enabled")) ||
+			!bool(GLOBAL_GET("rendering/voxel_forward/architectural_hit_buffer/enabled")) ||
+			p_render_data == nullptr || p_render_data->render_buffers.is_null() ||
+			p_render_data->scene_data->view_count != 1 || p_color_attachment_count < 1 || p_color_attachment_count > 3) {
+		return;
+	}
+	if (!volume_storage.has_enabled_outlines()) {
+		return;
+	}
+
+	Ref<RenderSceneBuffersRD> render_buffers = p_render_data->render_buffers;
+	Ref<RenderBufferDataForwardClustered> forward_buffers = render_buffers->get_custom_data(RB_SCOPE_FORWARD_CLUSTERED);
+	if (forward_buffers.is_null() || !forward_buffers->has_voxel_hit() ||
+			!render_buffers->has_texture(RB_SCOPE_BUFFERS, RB_TEX_BACK_DEPTH)) {
+		return;
+	}
+	RID instance_buffer = _get_opaque_instance_buffer();
+	const uint32_t instance_count = _get_opaque_instance_count();
+	if (!instance_buffer.is_valid() || instance_count == 0) {
+		return;
+	}
+
+	_ensure_outline_resources();
+	const uint32_t sample_index = uint32_t(render_buffers->get_texture_samples());
+	if (sample_index >= RD::TEXTURE_SAMPLES_MAX) {
+		return;
+	}
+	RID pipeline = outline_pipelines[sample_index][p_color_attachment_count - 1].get_render_pipeline(RD::INVALID_ID, RD::get_singleton()->framebuffer_get_format(p_framebuffer));
+	if (!pipeline.is_valid()) {
+		return;
+	}
+
+	RendererRD::MaterialStorage *material_storage = RendererRD::MaterialStorage::get_singleton();
+	RID sampler = material_storage->sampler_rd_get_default(RSE::CANVAS_ITEM_TEXTURE_FILTER_NEAREST, RSE::CANVAS_ITEM_TEXTURE_REPEAT_DISABLED);
+	RID shader = outline_shader.version_get_shader(outline_shader_version, 0);
+	RD::Uniform u_hit(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ sampler, forward_buffers->get_voxel_hit() }));
+	RD::Uniform u_depth(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 1, Vector<RID>({ sampler, render_buffers->get_texture(RB_SCOPE_BUFFERS, RB_TEX_BACK_DEPTH) }));
+	RD::Uniform u_instances(RD::UNIFORM_TYPE_STORAGE_BUFFER_DYNAMIC, 2, Vector<RID>({ instance_buffer }));
+	RID uniform_set = UniformSetCacheRD::get_singleton()->get_cache(shader, 0, u_hit, u_depth, u_instances);
+
+	OutlinePushConstant push_constant = {};
+	const Size2i screen_size = render_buffers->get_internal_size();
+	push_constant.screen_instances[0] = screen_size.x;
+	push_constant.screen_instances[1] = screen_size.y;
+	push_constant.screen_instances[2] = int32_t(instance_count);
+	push_constant.instance_layout[0] = int32_t(_get_instance_data_stride_words());
+	push_constant.instance_layout[1] = int32_t(_get_voxel_style_word_offset());
+	push_constant.thresholds[0] = MAX(0.0f, float(GLOBAL_GET("rendering/voxel_forward/outline/depth_threshold")));
+	push_constant.thresholds[1] = MAX(0.0f, float(GLOBAL_GET("rendering/voxel_forward/outline/planar_depth_tolerance")));
+
+	RENDER_TIMESTAMP("Voxel Outline Post Process");
+	RD::get_singleton()->draw_command_begin_label("Voxel Outline Post Process");
+	RD::DrawListID draw_list = RD::get_singleton()->draw_list_begin(p_framebuffer, RD::DRAW_DEFAULT_ALL, Vector<Color>(), 1.0f, 0u, p_render_data->render_region);
+	RD::get_singleton()->draw_list_bind_render_pipeline(draw_list, pipeline);
+	RD::get_singleton()->draw_list_bind_uniform_set(draw_list, uniform_set, 0);
+	RD::get_singleton()->draw_list_set_push_constant(draw_list, &push_constant, sizeof(OutlinePushConstant));
+	RD::get_singleton()->draw_list_draw(draw_list, false, 1, 3);
+	RD::get_singleton()->draw_list_end();
+	RD::get_singleton()->draw_command_end_label();
+}
+
 void RenderVoxelForward::_render_scene_custom_opaque(RenderDataRD *p_render_data, RID p_framebuffer, uint32_t p_color_pass_flags, uint32_t p_color_attachment_count, bool p_depth_prepass) {
 	if (!bool(GLOBAL_GET("rendering/voxel_forward/experimental_custom_visibility")) || visible_volumes.is_empty() || p_render_data->scene_data->cam_orthogonal || p_render_data->scene_data->view_count != 1 || p_color_attachment_count < 1 || p_color_attachment_count > 3) {
+		_render_voxel_outline(p_render_data, p_framebuffer, p_color_attachment_count);
 		return;
 	}
 	_ensure_visibility_resources();
@@ -2158,6 +2382,7 @@ void RenderVoxelForward::_render_scene_custom_opaque(RenderDataRD *p_render_data
 
 	RD::get_singleton()->draw_list_end();
 	RD::get_singleton()->draw_command_end_label();
+	_render_voxel_outline(p_render_data, p_framebuffer, p_color_attachment_count);
 }
 
 } // namespace RendererSceneRenderImplementation

@@ -114,6 +114,7 @@ public:
 	// Forward Clustered scene descriptor table using the current instance row.
 	void set_batched_resources_enabled(bool p_enabled);
 	bool is_batched_resources_enabled() const;
+	virtual bool is_editor_preview_supported() const override { return false; }
 	// VoxelMaterial is serialized as lightweight configuration. VoxelVolume3D
 	// calls this only on its private runtime copy so generated Shader and 3D
 	// texture resources never become scene subresources.

@@ -85,6 +85,9 @@ public:
 	virtual RID get_rid() const override;
 	virtual RID get_shader_rid() const;
 	virtual Shader::Mode get_shader_mode() const;
+	// Some renderer-owned materials require proxy geometry and bindings that the
+	// generic editor sphere/box preview cannot provide.
+	virtual bool is_editor_preview_supported() const { return true; }
 
 	virtual Ref<Resource> create_placeholder() const;
 

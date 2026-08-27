@@ -839,6 +839,10 @@ protected:
 	// The default implementation leaves the zero-initialized row untouched.
 	virtual void _fill_voxel_instance_data(RID p_base, VoxelInstanceData &r_instance_data) const {}
 	RID _get_default_vec4_xform_buffer() const { return scene_shader.default_vec4_xform_buffer; }
+	RID _get_opaque_instance_buffer() { return scene_state.instance_buffer[RENDER_LIST_OPAQUE].get_size(0u) > 0u ? scene_state.instance_buffer[RENDER_LIST_OPAQUE]._get(0u) : RID(); }
+	uint32_t _get_opaque_instance_count() const { return render_list[RENDER_LIST_OPAQUE].elements.size(); }
+	static constexpr uint32_t _get_instance_data_stride_words() { return sizeof(SceneState::InstanceData) / sizeof(uint32_t); }
+	static constexpr uint32_t _get_voxel_style_word_offset() { return (offsetof(SceneState::InstanceData, voxel) + offsetof(VoxelInstanceData, voxel_size_pad)) / sizeof(uint32_t); }
 
 	virtual RID _render_buffers_get_normal_texture(Ref<RenderSceneBuffersRD> p_render_buffers) override;
 	virtual RID _render_buffers_get_velocity_texture(Ref<RenderSceneBuffersRD> p_render_buffers) override;

@@ -8,12 +8,12 @@
 
 static Vector4 _make_voxelized_ao_curve(real_t p_hardness, real_t p_strength) {
 	const real_t exponent = Math::pow(real_t(2.0), (CLAMP(p_hardness, real_t(0.0), real_t(1.0)) - real_t(0.5)) * real_t(4.0));
-	const real_t strength = CLAMP(p_strength, real_t(0.0), real_t(1.0));
+	const real_t strength = CLAMP(p_strength, real_t(0.0), real_t(4.0));
 	return Vector4(
-			Math::pow(real_t(0.25), exponent) * strength,
-			Math::pow(real_t(0.5), exponent) * strength,
-			Math::pow(real_t(0.75), exponent) * strength,
-			strength);
+			MIN(Math::pow(real_t(0.25), exponent) * strength, real_t(1.0)),
+			MIN(Math::pow(real_t(0.5), exponent) * strength, real_t(1.0)),
+			MIN(Math::pow(real_t(0.75), exponent) * strength, real_t(1.0)),
+			MIN(strength, real_t(1.0)));
 }
 
 static const char *VOXEL_FORWARD_INDIRECT_FUNCTIONS = R"SHADER(
@@ -697,7 +697,7 @@ void VoxelMaterial::_bind_methods() {
 	ADD_GROUP("Ambient Occlusion", "ambient_occlusion_");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "ambient_occlusion_enabled"), "set_ambient_occlusion_enabled", "is_ambient_occlusion_enabled");
 	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "ambient_occlusion_color", PROPERTY_HINT_COLOR_NO_ALPHA), "set_ambient_occlusion_color", "get_ambient_occlusion_color");
-	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ambient_occlusion_strength", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_ambient_occlusion_strength", "get_ambient_occlusion_strength");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ambient_occlusion_strength", PROPERTY_HINT_RANGE, "0,4,0.01"), "set_ambient_occlusion_strength", "get_ambient_occlusion_strength");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ambient_occlusion_hardness", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_ambient_occlusion_hardness", "get_ambient_occlusion_hardness");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "ambient_occlusion_mode", PROPERTY_HINT_ENUM, "Smooth,Voxelized,Hard Corners"), "set_ambient_occlusion_mode", "get_ambient_occlusion_mode");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "ambient_occlusion_face_mode", PROPERTY_HINT_ENUM, "All Faces,Floor Faces Only,Ceiling Faces Only"), "set_ambient_occlusion_face_mode", "get_ambient_occlusion_face_mode");
@@ -738,6 +738,10 @@ void VoxelMaterial::_rebuild_shader() {
 			bool(GLOBAL_GET("rendering/voxel_forward/architectural_hit_buffer/exact_position_enabled"));
 	const bool use_precomputed_inverse = use_architectural_hit_buffer && !use_architectural_hit_position &&
 			bool(GLOBAL_GET("rendering/voxel_forward/architectural_hit_buffer/precomputed_inverse_enabled"));
+	// Voxel Forward outlines are composited from the architectural hit buffer.
+	// Keeping this work out of the material variant avoids four occupancy reads,
+	// derivatives, and their live values in the register-heavy opaque shader.
+	const bool use_material_outline = outline_enabled && !use_architectural_hit_buffer;
 	// Voxel Forward is face-shaded by definition. Point and spot lights must use
 	// the same face-center receiver as directional visibility, so illumination
 	// cannot form a smooth gradient across an individual voxel face.
@@ -750,7 +754,7 @@ void VoxelMaterial::_rebuild_shader() {
 	shader_key |= use_face_center_lighting ? VOXEL_SHADER_FACE_CENTER_LIGHTING : 0;
 	shader_key |= ambient_occlusion_enabled ? VOXEL_SHADER_AMBIENT_OCCLUSION : 0;
 	shader_key |= uint32_t(ao_mode_index) << 6;
-	shader_key |= outline_enabled ? VOXEL_SHADER_OUTLINE : 0;
+	shader_key |= use_material_outline ? VOXEL_SHADER_OUTLINE : 0;
 	shader_key |= use_voxel_forward_indirect ? VOXEL_SHADER_INDIRECT : 0;
 	shader_key |= use_voxel_forward_reflection ? VOXEL_SHADER_REFLECTION : 0;
 	shader_key |= metallic_texture_enabled ? VOXEL_SHADER_METALLIC_TEXTURE : 0;
@@ -906,7 +910,7 @@ uniform int ambient_occlusion_face_mode = 0;
 				ao_uniforms += "uniform vec4 ambient_occlusion_voxelized_curve = vec4(0.25, 0.5, 0.75, 1.0);\n";
 				ao_functions += VOXEL_AO_VOXELIZED_FUNCTION;
 			} else {
-				ao_uniforms += "uniform float ambient_occlusion_strength : hint_range(0.0, 1.0) = 1.0;\n";
+				ao_uniforms += "uniform float ambient_occlusion_strength : hint_range(0.0, 4.0) = 1.0;\n";
 				ao_uniforms += "uniform float ambient_occlusion_hardness : hint_range(0.0, 1.0) = 0.5;\n";
 				ao_functions += VOXEL_AO_CORNER_FUNCTION;
 				ao_functions += ambient_occlusion_mode == AMBIENT_OCCLUSION_MODE_HARD_CORNERS ? VOXEL_AO_HARD_CORNER_FUNCTION : VOXEL_AO_SMOOTH_FUNCTION;
@@ -930,7 +934,7 @@ uniform int ambient_occlusion_face_mode = 0;
 			} else {
 				ao_output += R"SHADER(
 		float hardness_exponent = exp2((clamp(ambient_occlusion_hardness, 0.0, 1.0) - 0.5) * 4.0);
-		float occlusion_amount = pow(raw_occlusion, hardness_exponent) * clamp(ambient_occlusion_strength, 0.0, 1.0);
+		float occlusion_amount = min(pow(raw_occlusion, hardness_exponent) * clamp(ambient_occlusion_strength, 0.0, 4.0), 1.0);
 )SHADER";
 			}
 			ao_output += R"SHADER(
@@ -966,12 +970,12 @@ uniform int ambient_occlusion_face_mode = 0;
 		}
 		body = body.replace("// OPTIONAL_MATERIAL_TEXTURE_UNIFORMS", optional_texture_uniforms);
 		body = body.replace("// MATERIAL_CHANNEL_OUTPUTS", material_channel_outputs);
-		body = body.replace("// OUTLINE_UNIFORMS", outline_enabled ? String(R"SHADER(
+		body = body.replace("// OUTLINE_UNIFORMS", use_material_outline ? String(R"SHADER(
 uniform vec4 outline_color : source_color = vec4(0.0, 0.0, 0.0, 1.0);
 uniform float outline_width = 1.0;
 )SHADER") : String());
-		body = body.replace("// OUTLINE_FUNCTION", outline_enabled ? String(VOXEL_OUTLINE_FUNCTION) : String());
-		body = body.replace("// ALBEDO_OUTPUT", outline_enabled ? String(R"SHADER(
+		body = body.replace("// OUTLINE_FUNCTION", use_material_outline ? String(VOXEL_OUTLINE_FUNCTION) : String());
+		body = body.replace("// ALBEDO_OUTPUT", use_material_outline ? String(R"SHADER(
 	float outline = voxel_normal_outline(hit_voxel, hit_voxel_position, hit_axis) * outline_color.a;
 	ALBEDO = mix(palette_color * albedo_modulate.rgb, outline_color.rgb, outline);
 )SHADER") : "ALBEDO = palette_color * albedo_modulate.rgb;");
@@ -1057,7 +1061,7 @@ global uniform float voxel_forward_reflection_intensity;
 			set_shader_parameter("ambient_occlusion_hardness", ambient_occlusion_hardness);
 		}
 	}
-	if (outline_enabled) {
+	if (use_material_outline) {
 		set_shader_parameter("outline_color", outline_color);
 		set_shader_parameter("outline_width", outline_width);
 	}
@@ -1130,7 +1134,7 @@ void VoxelMaterial::set_ambient_occlusion_color(const Color &p_color) {
 Color VoxelMaterial::get_ambient_occlusion_color() const { return ambient_occlusion_color; }
 
 void VoxelMaterial::set_ambient_occlusion_strength(real_t p_strength) {
-	p_strength = CLAMP(p_strength, real_t(0.0), real_t(1.0));
+	p_strength = CLAMP(p_strength, real_t(0.0), real_t(4.0));
 	if (Math::is_equal_approx(ambient_occlusion_strength, p_strength)) {
 		return;
 	}
@@ -1287,7 +1291,9 @@ void VoxelMaterial::set_outline_color(const Color &p_color) {
 		return;
 	}
 	outline_color = p_color;
-	if (get_shader().is_valid()) {
+	const bool post_process_outline = RenderingMethod::is_current_voxel_forward_method() &&
+			bool(GLOBAL_GET("rendering/voxel_forward/architectural_hit_buffer/enabled"));
+	if (get_shader().is_valid() && !post_process_outline) {
 		set_shader_parameter("outline_color", outline_color);
 	}
 	emit_changed();
@@ -1301,7 +1307,9 @@ void VoxelMaterial::set_outline_width(real_t p_width) {
 		return;
 	}
 	outline_width = p_width;
-	if (get_shader().is_valid()) {
+	const bool post_process_outline = RenderingMethod::is_current_voxel_forward_method() &&
+			bool(GLOBAL_GET("rendering/voxel_forward/architectural_hit_buffer/enabled"));
+	if (get_shader().is_valid() && !post_process_outline) {
 		set_shader_parameter("outline_width", outline_width);
 	}
 	emit_changed();

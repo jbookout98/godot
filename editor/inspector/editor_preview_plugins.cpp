@@ -338,6 +338,9 @@ bool EditorMaterialPreviewPlugin::generate_small_preview_automatically() const {
 Ref<Texture2D> EditorMaterialPreviewPlugin::generate(const Ref<Resource> &p_from, const Size2 &p_size, Dictionary &p_metadata) const {
 	Ref<Material> material = p_from;
 	ERR_FAIL_COND_V(material.is_null(), Ref<Texture2D>());
+	if (!material->is_editor_preview_supported()) {
+		return Ref<Texture2D>();
+	}
 
 	if (material->get_shader_mode() == Shader::MODE_SPATIAL) {
 		RS::get_singleton()->mesh_surface_set_material(sphere, 0, material->get_rid());

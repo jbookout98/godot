@@ -9,6 +9,7 @@
 
 #include "core/math/vector3i.h"
 #include "core/math/transform_3d.h"
+#include "core/math/color.h"
 #include "core/object/worker_thread_pool.h"
 #include "core/templates/hash_map.h"
 #include "core/templates/hash_set.h"
@@ -45,7 +46,9 @@ public:
 		uint32_t batch_texture_index = INVALID_BATCH_TEXTURE_INDEX;
 		uint32_t neighbor_mask = 0;
 		uint32_t neighbor_diagonal_mask = 0;
+		uint32_t outline_color_rgba8 = 0;
 		float voxel_size = 0.1f;
+		float outline_width = 0.0f;
 		uint64_t revision = 0;
 	};
 
@@ -93,6 +96,7 @@ private:
 	Vector<RID> batch_neighbor_textures;
 	Vector<uint32_t> free_batch_texture_indices;
 	uint64_t batch_texture_revision = 1;
+	uint32_t enabled_outline_volume_count = 0;
 	WorldOccupancy world_occupancy;
 	uint64_t occupancy_gpu_bytes = 0;
 	uint64_t world_occupancy_gpu_bytes = 0;
@@ -118,7 +122,7 @@ private:
 public:
 	static VoxelForwardVolumeStorage *get_singleton() { return singleton; }
 
-	static void volume_set_on_render_thread(RID p_base, RID p_voxel_texture, RID p_brick_texture, RID p_neighbor_texture, RID p_palette_texture, RID p_material_texture, PackedByteArray p_occupancy_directory, PackedByteArray p_occupancy_bricks, Vector3i p_dimensions, Vector3i p_brick_dimensions, Vector3i p_atlas_brick_dimensions, Transform3D p_transform, float p_voxel_size, int p_occupied_brick_count, int p_neighbor_mask, int p_neighbor_diagonal_mask, Vector3i p_dirty_position, Vector3i p_dirty_size, int64_t p_revision);
+	static void volume_set_on_render_thread(RID p_base, RID p_voxel_texture, RID p_brick_texture, RID p_neighbor_texture, RID p_palette_texture, RID p_material_texture, PackedByteArray p_occupancy_directory, PackedByteArray p_occupancy_bricks, Vector3i p_dimensions, Vector3i p_brick_dimensions, Vector3i p_atlas_brick_dimensions, Transform3D p_transform, float p_voxel_size, int p_occupied_brick_count, int p_neighbor_mask, int p_neighbor_diagonal_mask, bool p_outline_enabled, Color p_outline_color, float p_outline_width, Vector3i p_dirty_position, Vector3i p_dirty_size, int64_t p_revision);
 	static void volume_transform_set_on_render_thread(RID p_base, Transform3D p_transform);
 	static void volume_neighbors_set_on_render_thread(RID p_base, RID p_neighbor_texture, int p_neighbor_mask, int p_neighbor_diagonal_mask);
 	static void volume_remove_on_render_thread(RID p_base);
@@ -133,6 +137,7 @@ public:
 	const Vector<RID> &get_batch_neighbor_textures() const { return batch_neighbor_textures; }
 	uint64_t get_batch_texture_revision() const { return batch_texture_revision; }
 	uint32_t get_volume_count() const { return volumes.size(); }
+	bool has_enabled_outlines() const { return enabled_outline_volume_count > 0; }
 	uint64_t get_occupancy_gpu_bytes() const { return occupancy_gpu_bytes; }
 
 	VoxelForwardVolumeStorage();

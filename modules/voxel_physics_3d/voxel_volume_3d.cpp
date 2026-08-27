@@ -537,6 +537,9 @@ void VoxelVolume3D::_sync_voxel_forward_volume(bool p_remove) {
 			occupied_brick_count,
 			neighbor_mask,
 			neighbor_diagonal_mask,
+			voxel_material.is_valid() && voxel_material->is_outline_enabled(),
+			voxel_material.is_valid() ? voxel_material->get_outline_color() : Color(0.0, 0.0, 0.0, 1.0),
+			voxel_material.is_valid() ? float(voxel_material->get_outline_width()) : 1.0f,
 			voxel_forward_dirty_valid ? voxel_forward_dirty_position : Vector3i(),
 			voxel_forward_dirty_valid ? voxel_forward_dirty_size : Vector3i(),
 			int64_t(voxel_data->get_revision())));

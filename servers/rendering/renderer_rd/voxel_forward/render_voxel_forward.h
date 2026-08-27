@@ -34,6 +34,7 @@
 #include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_indirect_blend.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_indirect_inject.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_indirect_propagate.glsl.gen.h"
+#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_outline.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_reflection_color_inject.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_reflection_resolve.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_shadow_atlas.glsl.gen.h"
@@ -69,6 +70,10 @@ private:
 	RID visibility_shader_version;
 	PipelineCacheRD visibility_pipelines[3];
 	bool visibility_resources_initialized = false;
+	VoxelOutlineShaderRD outline_shader;
+	RID outline_shader_version;
+	PipelineCacheRD outline_pipelines[RD::TEXTURE_SAMPLES_MAX][3];
+	bool outline_resources_initialized = false;
 	VoxelShadowAtlasShaderRD shadow_atlas_shader;
 	RID shadow_atlas_shader_version;
 	RID shadow_atlas_pipeline;
@@ -183,6 +188,17 @@ private:
 	bool indirect_staging_active[INDIRECT_CASCADE_COUNT] = {};
 	bool indirect_staging_injected[INDIRECT_CASCADE_COUNT] = {};
 	bool indirect_staging_partial[INDIRECT_CASCADE_COUNT] = {};
+	bool indirect_staging_batch_classified = false;
+	bool indirect_staging_batch_low_latency = false;
+	uint64_t indirect_staging_dirty_cell_count = 0;
+	uint64_t indirect_staging_cell_pass_workload = 0;
+	uint32_t indirect_staging_dispatch_count = 0;
+	uint64_t indirect_render_frame_index = 0;
+	uint64_t indirect_staging_batch_detected_frame = 0;
+	uint64_t indirect_staging_detected_frame[INDIRECT_CASCADE_COUNT] = {};
+	uint64_t indirect_low_latency_update_count = 0;
+	uint64_t indirect_temporal_update_count = 0;
+	uint32_t indirect_last_publication_frames = 0;
 	IndirectCascadeDefinition indirect_blend_definition[INDIRECT_CASCADE_COUNT];
 	Vector3 indirect_blend_history_origin[INDIRECT_CASCADE_COUNT];
 	float indirect_blend_history_cell_size[INDIRECT_CASCADE_COUNT] = {};
@@ -190,6 +206,7 @@ private:
 	Vector3i indirect_blend_dispatch_size[INDIRECT_CASCADE_COUNT];
 	uint32_t indirect_blend_step[INDIRECT_CASCADE_COUNT] = {};
 	uint32_t indirect_blend_frame_count[INDIRECT_CASCADE_COUNT] = {};
+	uint64_t indirect_blend_detected_frame[INDIRECT_CASCADE_COUNT] = {};
 	bool indirect_blend_active[INDIRECT_CASCADE_COUNT] = {};
 	bool indirect_blend_has_history[INDIRECT_CASCADE_COUNT] = {};
 	bool indirect_active_converged[INDIRECT_CASCADE_COUNT] = {};
@@ -227,6 +244,12 @@ private:
 		float model_view_projection[16];
 		float camera_local[4];
 		int32_t volume_dimensions[4];
+	};
+
+	struct OutlinePushConstant {
+		int32_t screen_instances[4];
+		int32_t instance_layout[4];
+		float thresholds[4];
 	};
 
 	struct ShadowAtlasPushConstant {
@@ -306,6 +329,8 @@ private:
 	void _render_voxel_reflections(const RenderDataRD *p_render_data);
 	void _free_voxel_reflections();
 	void _ensure_visibility_resources();
+	void _ensure_outline_resources();
+	void _render_voxel_outline(RenderDataRD *p_render_data, RID p_framebuffer, uint32_t p_color_attachment_count);
 
 protected:
 	virtual void _add_voxel_occupancy_uniforms(Vector<RD::Uniform> &r_uniforms) override;

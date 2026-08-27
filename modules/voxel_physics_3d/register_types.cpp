@@ -81,6 +81,14 @@ void initialize_voxel_physics_3d_module(ModuleInitializationLevel p_level) {
 		// Run exact voxel traversal in the depth prepass and reuse its compact
 		// owner/face payload from the materially heavier opaque color pass.
 		GLOBAL_DEF("rendering/voxel_forward/architectural_hit_buffer/enabled", true);
+		// Screen-space silhouettes and face/depth creases are composited after the
+		// opaque pass. Per-material color and width remain on VoxelMaterial and are
+		// carried by the existing instance buffer.
+		GLOBAL_DEF("rendering/voxel_forward/outline/enabled", true);
+		GLOBAL_DEF("rendering/voxel_forward/outline/depth_threshold", 0.00005);
+		GLOBAL_DEF("rendering/voxel_forward/outline/planar_depth_tolerance", 2.0);
+		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_forward/outline/depth_threshold", PROPERTY_HINT_RANGE, "0,0.01,0.00001,or_greater"));
+		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_forward/outline/planar_depth_tolerance", PROPERTY_HINT_RANGE, "0.5,8,0.25,or_greater"));
 		// Voxel Forward consumes this binary mask during directional lighting,
 		// replacing per-volume draws in conventional shadow cascades.
 		// Experimental until the compute budget and renderer-wide receiver path
@@ -144,6 +152,8 @@ void initialize_voxel_physics_3d_module(ModuleInitializationLevel p_level) {
 		GLOBAL_DEF("rendering/voxel_forward/indirect_light/shadow_bias_voxels", 1.0);
 		GLOBAL_DEF("rendering/voxel_forward/indirect_light/intensity", 1.0);
 		GLOBAL_DEF("rendering/voxel_forward/indirect_light/dirty_updates_enabled", true);
+		GLOBAL_DEF("rendering/voxel_forward/indirect_light/low_latency_dirty_updates_enabled", true);
+		GLOBAL_DEF("rendering/voxel_forward/indirect_light/dirty_cell_pass_budget_per_frame", 65536);
 		GLOBAL_DEF("rendering/voxel_forward/indirect_light/temporal_updates_enabled", true);
 		GLOBAL_DEF("rendering/voxel_forward/indirect_light/dispatch_budget_per_frame", 1);
 		GLOBAL_DEF("rendering/voxel_forward/indirect_light/temporal_blend_enabled", true);
@@ -162,6 +172,7 @@ void initialize_voxel_physics_3d_module(ModuleInitializationLevel p_level) {
 		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_forward/indirect_light/propagation_decay", PROPERTY_HINT_RANGE, "0,0.99,0.01"));
 		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_forward/indirect_light/shadow_bias_voxels", PROPERTY_HINT_RANGE, "0,8,0.05"));
 		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::FLOAT, "rendering/voxel_forward/indirect_light/intensity", PROPERTY_HINT_RANGE, "0,8,0.05,or_greater"));
+		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::INT, "rendering/voxel_forward/indirect_light/dirty_cell_pass_budget_per_frame", PROPERTY_HINT_RANGE, "4096,16777216,4096,or_greater"));
 		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::INT, "rendering/voxel_forward/indirect_light/dispatch_budget_per_frame", PROPERTY_HINT_RANGE, "1,16,1"));
 		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::INT, "rendering/voxel_forward/indirect_light/blend_dispatch_budget_per_frame", PROPERTY_HINT_RANGE, "1,3,1"));
 		ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::INT, "rendering/voxel_forward/indirect_light/temporal_blend_frames", PROPERTY_HINT_RANGE, "1,60,1"));

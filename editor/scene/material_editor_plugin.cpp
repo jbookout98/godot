@@ -454,6 +454,9 @@ bool EditorInspectorPluginMaterial::can_handle(Object *p_object) {
 	if (!material) {
 		return false;
 	}
+	if (!material->is_editor_preview_supported()) {
+		return false;
+	}
 	Shader::Mode mode = material->get_shader_mode();
 	return mode == Shader::MODE_SPATIAL || mode == Shader::MODE_CANVAS_ITEM;
 }
