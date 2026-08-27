@@ -40,8 +40,9 @@ jobs:
           files_yaml_from_source_file: .github/changed_files.yml
 
       - name: Style checks via prek
-        uses: j178/prek-action@v2
+        uses: j178/prek-action@4e14d07f9231acabce116ccfca13b13dd9755ece # v3.0.0
         env:
           CHANGED_FILES: '"${{ steps.changed-files.outputs.everything_all_changed_files }}"' # Wrap with quotes to bookend internal quote separators.
         with:
+          cache: false # Avoid restoring uv interpreter state from another hosted runner.
           extra-args: --files ${{ env.CHANGED_FILES }}
