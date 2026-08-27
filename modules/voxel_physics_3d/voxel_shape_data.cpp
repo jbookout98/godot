@@ -4,6 +4,8 @@
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
 
+#include <cstring>
+
 namespace {
 
 static const Vector3i SURFACE_DIRECTIONS[6] = {
@@ -11,6 +13,21 @@ static const Vector3i SURFACE_DIRECTIONS[6] = {
 	Vector3i(0, 1, 0), Vector3i(0, -1, 0),
 	Vector3i(0, 0, 1), Vector3i(0, 0, -1)
 };
+
+bool _voxel_matches_edit_action(uint8_t p_current, int p_action, uint8_t p_palette_index) {
+	switch (p_action) {
+		case -1: // Geometry-only collection.
+			return true;
+		case 0: // Replace.
+			return p_current != 0 && p_current != p_palette_index;
+		case 1: // Add.
+			return p_current == 0;
+		case 2: // Clear.
+			return p_current != 0;
+		default:
+			return false;
+	}
+}
 
 } // namespace
 
@@ -22,6 +39,9 @@ void VoxelShapeData::_bind_methods() {
 
 	ClassDB::bind_method(D_METHOD("get_voxel", "position"), &VoxelShapeData::get_voxel);
 	ClassDB::bind_method(D_METHOD("set_voxel", "position", "palette_index"), &VoxelShapeData::set_voxel);
+	ClassDB::bind_method(D_METHOD("collect_editable_sphere_indices", "center", "radius", "action", "palette_index"), &VoxelShapeData::collect_editable_sphere_indices);
+	ClassDB::bind_method(D_METHOD("collect_editable_cuboid_indices", "volume_transform", "voxel_size", "center", "shape_basis", "half_extents", "minimum", "maximum", "action", "palette_index"), &VoxelShapeData::collect_editable_cuboid_indices);
+	ClassDB::bind_method(D_METHOD("collect_connected_surface_positions", "start", "surface_normal", "radius", "add_layer"), &VoxelShapeData::collect_connected_surface_positions);
 	ClassDB::bind_method(D_METHOD("apply_voxel_edits", "positions", "palette_indices"), &VoxelShapeData::apply_voxel_edits);
 	ClassDB::bind_method(D_METHOD("apply_voxel_edits_by_index", "indices", "palette_indices"), &VoxelShapeData::apply_voxel_edits_by_index);
 	ClassDB::bind_method(D_METHOD("fill_voxel_region", "position", "size", "palette_index"), &VoxelShapeData::fill_voxel_region);
@@ -244,6 +264,141 @@ bool VoxelShapeData::set_voxel(const Vector3i &p_position, int p_palette_index) 
 	_mark_voxel_dirty(p_position);
 	_flush_edits();
 	return true;
+}
+
+PackedInt32Array VoxelShapeData::collect_editable_sphere_indices(const Vector3 &p_center, real_t p_radius, int p_action, int p_palette_index) const {
+	ERR_FAIL_COND_V_MSG(p_radius < 0.0, PackedInt32Array(), "radius cannot be negative.");
+	ERR_FAIL_COND_V_MSG(p_action < -1 || p_action > 2, PackedInt32Array(), "action must be -1 (any), 0 (replace), 1 (add), or 2 (clear).");
+	ERR_FAIL_COND_V_MSG(p_palette_index < 0 || p_palette_index > 255, PackedInt32Array(), "palette_index must be in the range 0..255.");
+
+	PackedInt32Array indices;
+	const real_t radius_squared = p_radius * p_radius;
+	const int minimum_z = MAX(0, int(Math::ceil(p_center.z - p_radius)));
+	const int maximum_z = MIN(dimensions.z - 1, int(Math::floor(p_center.z + p_radius)));
+	const int plane_size = dimensions.x * dimensions.y;
+	for (int z = minimum_z; z <= maximum_z; z++) {
+		const real_t delta_z = real_t(z) - p_center.z;
+		const real_t remaining_yz = radius_squared - delta_z * delta_z;
+		if (remaining_yz < 0.0) {
+			continue;
+		}
+		const real_t y_radius = Math::sqrt(remaining_yz);
+		const int minimum_y = MAX(0, int(Math::ceil(p_center.y - y_radius)));
+		const int maximum_y = MIN(dimensions.y - 1, int(Math::floor(p_center.y + y_radius)));
+		for (int y = minimum_y; y <= maximum_y; y++) {
+			const real_t delta_y = real_t(y) - p_center.y;
+			const real_t remaining_x = remaining_yz - delta_y * delta_y;
+			if (remaining_x < 0.0) {
+				continue;
+			}
+			const real_t x_radius = Math::sqrt(remaining_x);
+			const int minimum_x = MAX(0, int(Math::ceil(p_center.x - x_radius)));
+			const int maximum_x = MIN(dimensions.x - 1, int(Math::floor(p_center.x + x_radius)));
+			for (int x = minimum_x; x <= maximum_x; x++) {
+				const Vector3i position(x, y, z);
+				if (_voxel_matches_edit_action(brick_storage.get_voxel(position), p_action, uint8_t(p_palette_index))) {
+					indices.push_back(x + y * dimensions.x + z * plane_size);
+				}
+			}
+		}
+	}
+	return indices;
+}
+
+PackedInt32Array VoxelShapeData::collect_editable_cuboid_indices(const Transform3D &p_volume_transform, real_t p_voxel_size, const Vector3 &p_center, const Basis &p_shape_basis, const Vector3 &p_half_extents, const Vector3i &p_minimum, const Vector3i &p_maximum, int p_action, int p_palette_index) const {
+	ERR_FAIL_COND_V_MSG(p_voxel_size <= 0.0, PackedInt32Array(), "voxel_size must be greater than zero.");
+	ERR_FAIL_COND_V_MSG(p_half_extents.x < 0.0 || p_half_extents.y < 0.0 || p_half_extents.z < 0.0, PackedInt32Array(), "half_extents cannot be negative.");
+	ERR_FAIL_COND_V_MSG(p_action < -1 || p_action > 2, PackedInt32Array(), "action must be -1 (any), 0 (replace), 1 (add), or 2 (clear).");
+	ERR_FAIL_COND_V_MSG(p_palette_index < 0 || p_palette_index > 255, PackedInt32Array(), "palette_index must be in the range 0..255.");
+
+	PackedInt32Array indices;
+	if (p_maximum.x < 0 || p_maximum.y < 0 || p_maximum.z < 0 ||
+			p_minimum.x >= dimensions.x || p_minimum.y >= dimensions.y || p_minimum.z >= dimensions.z) {
+		return indices;
+	}
+	const Vector3i minimum(
+			CLAMP(p_minimum.x, 0, dimensions.x - 1),
+			CLAMP(p_minimum.y, 0, dimensions.y - 1),
+			CLAMP(p_minimum.z, 0, dimensions.z - 1));
+	const Vector3i maximum(
+			CLAMP(p_maximum.x, 0, dimensions.x - 1),
+			CLAMP(p_maximum.y, 0, dimensions.y - 1),
+			CLAMP(p_maximum.z, 0, dimensions.z - 1));
+	if (minimum.x > maximum.x || minimum.y > maximum.y || minimum.z > maximum.z) {
+		return indices;
+	}
+	const int plane_size = dimensions.x * dimensions.y;
+	const Basis inverse_shape_basis = p_shape_basis.inverse();
+	for (int z = minimum.z; z <= maximum.z; z++) {
+		for (int y = minimum.y; y <= maximum.y; y++) {
+			for (int x = minimum.x; x <= maximum.x; x++) {
+				const Vector3 local_center = (Vector3(x, y, z) + Vector3(0.5, 0.5, 0.5)) * p_voxel_size;
+				Vector3 offset = p_volume_transform.basis.xform(local_center) + p_volume_transform.origin - p_center;
+				offset = inverse_shape_basis.xform(offset);
+				if (Math::abs(offset.x) > p_half_extents.x || Math::abs(offset.y) > p_half_extents.y || Math::abs(offset.z) > p_half_extents.z) {
+					continue;
+				}
+				const Vector3i position(x, y, z);
+				if (_voxel_matches_edit_action(brick_storage.get_voxel(position), p_action, uint8_t(p_palette_index))) {
+					indices.push_back(x + y * dimensions.x + z * plane_size);
+				}
+			}
+		}
+	}
+	return indices;
+}
+
+Array VoxelShapeData::collect_connected_surface_positions(const Vector3i &p_start, const Vector3i &p_surface_normal, int p_radius, bool p_add_layer) const {
+	ERR_FAIL_COND_V_MSG(!is_inside(p_start), Array(), "start is outside VoxelShapeData dimensions.");
+	ERR_FAIL_COND_V_MSG(p_radius < 0, Array(), "radius cannot be negative.");
+	ERR_FAIL_COND_V_MSG(Math::abs(p_surface_normal.x) + Math::abs(p_surface_normal.y) + Math::abs(p_surface_normal.z) != 1, Array(), "surface_normal must be an axis-aligned unit vector.");
+
+	const uint8_t target_material = brick_storage.get_voxel(p_start);
+	if (target_material == 0 || brick_storage.get_voxel(p_start + p_surface_normal) != 0) {
+		return Array();
+	}
+
+	Vector<uint8_t> visited;
+	visited.resize(_get_expected_voxel_count());
+	memset(visited.ptrw(), 0, visited.size());
+	Vector<Vector3i> queue;
+	queue.push_back(p_start);
+	visited.write[get_voxel_index(p_start)] = 1;
+	Vector<Vector3i> surface_cells;
+	const int64_t radius_squared = int64_t(p_radius) * int64_t(p_radius);
+	for (int read_index = 0; read_index < queue.size(); read_index++) {
+		const Vector3i cell = queue[read_index];
+		surface_cells.push_back(cell);
+		for (const Vector3i &direction : SURFACE_DIRECTIONS) {
+			if (direction.x * p_surface_normal.x + direction.y * p_surface_normal.y + direction.z * p_surface_normal.z != 0) {
+				continue;
+			}
+			const Vector3i neighbor = cell + direction;
+			if (!is_inside(neighbor)) {
+				continue;
+			}
+			const int neighbor_index = get_voxel_index(neighbor);
+			if (visited[neighbor_index] != 0) {
+				continue;
+			}
+			const Vector3i delta = neighbor - p_start;
+			const int64_t distance_squared = int64_t(delta.x) * delta.x + int64_t(delta.y) * delta.y + int64_t(delta.z) * delta.z;
+			if (distance_squared > radius_squared || brick_storage.get_voxel(neighbor) != target_material || brick_storage.get_voxel(neighbor + p_surface_normal) != 0) {
+				continue;
+			}
+			visited.write[neighbor_index] = 1;
+			queue.push_back(neighbor);
+		}
+	}
+
+	Array positions;
+	for (const Vector3i &cell : surface_cells) {
+		const Vector3i position = p_add_layer ? cell + p_surface_normal : cell;
+		if (!p_add_layer || brick_storage.get_voxel(position) == 0) {
+			positions.push_back(position);
+		}
+	}
+	return positions;
 }
 
 int VoxelShapeData::apply_voxel_edits(const Array &p_positions, const PackedByteArray &p_palette_indices) {

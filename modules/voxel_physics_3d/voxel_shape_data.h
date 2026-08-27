@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/io/resource.h"
+#include "core/math/transform_3d.h"
 #include "scene/resources/3d/shape_3d.h"
 #include "scene/resources/texture.h"
 #include "voxel_brick_storage.h"
@@ -57,6 +58,9 @@ public:
 	int get_voxel_index(const Vector3i &p_position) const;
 	int get_voxel(const Vector3i &p_position) const;
 	bool set_voxel(const Vector3i &p_position, int p_palette_index);
+	PackedInt32Array collect_editable_sphere_indices(const Vector3 &p_center, real_t p_radius, int p_action, int p_palette_index) const;
+	PackedInt32Array collect_editable_cuboid_indices(const Transform3D &p_volume_transform, real_t p_voxel_size, const Vector3 &p_center, const Basis &p_shape_basis, const Vector3 &p_half_extents, const Vector3i &p_minimum, const Vector3i &p_maximum, int p_action, int p_palette_index) const;
+	Array collect_connected_surface_positions(const Vector3i &p_start, const Vector3i &p_surface_normal, int p_radius, bool p_add_layer) const;
 	int apply_voxel_edits(const Array &p_positions, const PackedByteArray &p_palette_indices);
 	int apply_voxel_edits_by_index(const PackedInt32Array &p_indices, const PackedByteArray &p_palette_indices);
 	int fill_voxel_region(const Vector3i &p_position, const Vector3i &p_size, int p_palette_index);
