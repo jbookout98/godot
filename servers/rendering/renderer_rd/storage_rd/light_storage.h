@@ -833,6 +833,37 @@ public:
 	RID get_spot_light_buffer() { return spot_light_buffer; }
 	RID get_area_light_buffer() { return area_light_buffer; }
 	RID get_directional_light_buffer() { return directional_light_buffer; }
+	struct VoxelLocalShadowLightData {
+		Vector3 position;
+		Vector3 direction;
+		float inv_radius = 0.0f;
+		float cone_angle = 0.0f;
+		float shadow_opacity = 0.0f;
+	};
+	uint32_t get_omni_light_count() const { return omni_light_count; }
+	uint32_t get_spot_light_count() const { return spot_light_count; }
+	bool get_omni_voxel_shadow_light_data(uint32_t p_index, VoxelLocalShadowLightData &r_data) const {
+		if (p_index >= omni_light_count) {
+			return false;
+		}
+		const LightData &source = omni_lights[p_index];
+		r_data.position = Vector3(source.position[0], source.position[1], source.position[2]);
+		r_data.inv_radius = source.inv_radius;
+		r_data.shadow_opacity = source.shadow_opacity;
+		return true;
+	}
+	bool get_spot_voxel_shadow_light_data(uint32_t p_index, VoxelLocalShadowLightData &r_data) const {
+		if (p_index >= spot_light_count) {
+			return false;
+		}
+		const LightData &source = spot_lights[p_index];
+		r_data.position = Vector3(source.position[0], source.position[1], source.position[2]);
+		r_data.direction = Vector3(source.direction[0], source.direction[1], source.direction[2]);
+		r_data.inv_radius = source.inv_radius;
+		r_data.cone_angle = source.cos_spot_angle;
+		r_data.shadow_opacity = source.shadow_opacity;
+		return true;
+	}
 	uint32_t get_max_directional_lights() { return max_directional_lights; }
 	uint32_t get_directional_light_blend_splits(uint32_t p_directional_light_count) const {
 		uint32_t blend_splits = 0;

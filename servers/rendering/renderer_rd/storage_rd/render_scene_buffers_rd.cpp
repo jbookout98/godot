@@ -49,6 +49,8 @@ RenderSceneBuffersRD::~RenderSceneBuffersRD() {
 }
 
 void RenderSceneBuffersRD::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("get_voxel_sunlight_atlas"), &RenderSceneBuffersRD::get_voxel_sunlight_atlas);
+	ClassDB::bind_method(D_METHOD("get_voxel_sunlight_parameters"), &RenderSceneBuffersRD::get_voxel_sunlight_parameters);
 	ClassDB::bind_method(D_METHOD("has_texture", "context", "name"), &RenderSceneBuffersRD::has_texture);
 	ClassDB::bind_method(D_METHOD("create_texture", "context", "name", "data_format", "usage_bits", "texture_samples", "size", "layers", "mipmaps", "unique", "discardable"), &RenderSceneBuffersRD::create_texture);
 	ClassDB::bind_method(D_METHOD("create_texture_from_format", "context", "name", "format", "view", "unique"), &RenderSceneBuffersRD::_create_texture_from_format);
@@ -124,7 +126,19 @@ void RenderSceneBuffersRD::update_samplers() {
 	samplers = material_storage->samplers_rd_allocate(computed_mipmap_bias, anisotropic_filtering_level);
 }
 
+void RenderSceneBuffersRD::set_voxel_sunlight_atlas(RID p_atlas, const Vector<float> &p_parameters) {
+	ERR_FAIL_COND(p_parameters.size() != 20);
+	voxel_sunlight_atlas = p_atlas;
+	voxel_sunlight_parameters = p_parameters;
+}
+
+void RenderSceneBuffersRD::clear_voxel_sunlight_atlas() {
+	voxel_sunlight_atlas = RID();
+	voxel_sunlight_parameters.clear();
+}
+
 void RenderSceneBuffersRD::cleanup() {
+	clear_voxel_sunlight_atlas();
 	// Free our data buffers (but don't destroy them)
 	for (KeyValue<StringName, Ref<RenderBufferCustomDataRD>> &E : data_buffers) {
 		E.value->free_data();
@@ -493,6 +507,9 @@ Size2i RenderSceneBuffersRD::get_texture_slice_size(const StringName &p_context,
 }
 
 void RenderSceneBuffersRD::clear_context(const StringName &p_context) {
+	if (p_context == SNAME("voxel_forward")) {
+		clear_voxel_sunlight_atlas();
+	}
 	Vector<NTKey> to_free; // free these
 
 	// Find all entries for our context, we don't want to free them yet or our loop fails.

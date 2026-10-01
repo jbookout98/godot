@@ -156,6 +156,9 @@
 		</method>
 	</methods>
 	<members>
+		<member name="voxel_shadows_enabled" type="bool" setter="set_voxel_shadows_enabled" getter="is_voxel_shadows_enabled" default="true">
+			Whether this volume blocks light. Disable for emissive visual effects: the volume remains visible but is excluded from native world/dynamic lighting occupancy and conventional shadow casting. This also excludes it from occupancy-based indirect light sampling; use a [Light3D] for immediate effect illumination. Unlike the inherited [member GeometryInstance3D.cast_shadow] backend flag, this authored setting is preserved when entering the tree or changing transforms. Defaults to enabled for compatibility with older scenes whose backend flag was set automatically.
+		</member>
 		<member name="streaming_distance" type="float" setter="set_streaming_distance" getter="get_streaming_distance" default="0.0">
 			Automatic-streaming distance override in world units. Zero uses the global project setting.
 		</member>

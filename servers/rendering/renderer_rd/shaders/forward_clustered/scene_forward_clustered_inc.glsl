@@ -530,6 +530,21 @@ layout(set = 1, binding = 39) uniform texture2D voxel_hit_position_buffer;
 #endif
 #endif
 
+struct VoxelLocalShadowEntry {
+	vec4 position_inv_radius;
+	vec4 direction_cone;
+	ivec4 indices;
+};
+
+layout(set = 1, binding = 40) uniform sampler2DArray voxel_local_shadow_masks;
+layout(set = 1, binding = 41, std140) uniform VoxelLocalShadowData {
+	mat4 inv_view_projection;
+	ivec4 state;
+	vec4 trace_settings;
+	VoxelLocalShadowEntry entries[32];
+}
+voxel_local_shadows;
+
 #endif
 
 vec4 normal_roughness_compatibility(vec4 p_normal_roughness) {

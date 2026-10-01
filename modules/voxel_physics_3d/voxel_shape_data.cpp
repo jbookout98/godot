@@ -42,6 +42,8 @@ void VoxelShapeData::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("collect_editable_sphere_indices", "center", "radius", "action", "palette_index"), &VoxelShapeData::collect_editable_sphere_indices);
 	ClassDB::bind_method(D_METHOD("collect_editable_cuboid_indices", "volume_transform", "voxel_size", "center", "shape_basis", "half_extents", "minimum", "maximum", "action", "palette_index"), &VoxelShapeData::collect_editable_cuboid_indices);
 	ClassDB::bind_method(D_METHOD("collect_connected_surface_positions", "start", "surface_normal", "radius", "add_layer"), &VoxelShapeData::collect_connected_surface_positions);
+	ClassDB::bind_method(D_METHOD("filter_indices_excluding_palette", "indices", "excluded_palette_indices"), &VoxelShapeData::filter_indices_excluding_palette);
+	ClassDB::bind_method(D_METHOD("filter_positions_excluding_palette", "positions", "excluded_palette_indices"), &VoxelShapeData::filter_positions_excluding_palette);
 	ClassDB::bind_method(D_METHOD("apply_voxel_edits", "positions", "palette_indices"), &VoxelShapeData::apply_voxel_edits);
 	ClassDB::bind_method(D_METHOD("apply_voxel_edits_by_index", "indices", "palette_indices"), &VoxelShapeData::apply_voxel_edits_by_index);
 	ClassDB::bind_method(D_METHOD("fill_voxel_region", "position", "size", "palette_index"), &VoxelShapeData::fill_voxel_region);
@@ -399,6 +401,58 @@ Array VoxelShapeData::collect_connected_surface_positions(const Vector3i &p_star
 		}
 	}
 	return positions;
+}
+
+PackedInt32Array VoxelShapeData::filter_indices_excluding_palette(const PackedInt32Array &p_indices, const PackedByteArray &p_excluded_palette_indices) const {
+	if (p_indices.is_empty() || p_excluded_palette_indices.is_empty()) {
+		return p_indices;
+	}
+
+	bool excluded[256] = {};
+	for (int i = 0; i < p_excluded_palette_indices.size(); i++) {
+		excluded[p_excluded_palette_indices[i]] = true;
+	}
+
+	PackedInt32Array filtered;
+	filtered.resize(p_indices.size());
+	int write_index = 0;
+	const int cell_count = _get_expected_voxel_count();
+	const int plane = dimensions.x * dimensions.y;
+	for (int i = 0; i < p_indices.size(); i++) {
+		const int index = p_indices[i];
+		if (index < 0 || index >= cell_count) {
+			continue;
+		}
+		const Vector3i position(index % dimensions.x, (index / dimensions.x) % dimensions.y, index / plane);
+		if (!excluded[brick_storage.get_voxel(position)]) {
+			filtered.set(write_index++, index);
+		}
+	}
+	filtered.resize(write_index);
+	return filtered;
+}
+
+Array VoxelShapeData::filter_positions_excluding_palette(const Array &p_positions, const PackedByteArray &p_excluded_palette_indices) const {
+	if (p_positions.is_empty() || p_excluded_palette_indices.is_empty()) {
+		return p_positions;
+	}
+
+	bool excluded[256] = {};
+	for (int i = 0; i < p_excluded_palette_indices.size(); i++) {
+		excluded[p_excluded_palette_indices[i]] = true;
+	}
+
+	Array filtered;
+	filtered.resize(p_positions.size());
+	int write_index = 0;
+	for (int i = 0; i < p_positions.size(); i++) {
+		const Vector3i position = p_positions[i];
+		if (!is_inside(position) || !excluded[brick_storage.get_voxel(position)]) {
+			filtered[write_index++] = position;
+		}
+	}
+	filtered.resize(write_index);
+	return filtered;
 }
 
 int VoxelShapeData::apply_voxel_edits(const Array &p_positions, const PackedByteArray &p_palette_indices) {

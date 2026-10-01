@@ -18,6 +18,7 @@ layout(set = 0, binding = 3, std430) readonly buffer MixedBricks {
 	uint words[];
 }
 mixed_bricks;
+layout(set = 0, binding = 4) uniform sampler3D injection_grid;
 
 layout(push_constant, std430) uniform Params {
 	vec4 world_origin_voxel_size;
@@ -27,6 +28,16 @@ layout(push_constant, std430) uniform Params {
 	ivec4 dispatch_origin;
 }
 params;
+
+const int DIRECTION_COUNT = 6;
+const ivec3 DIRECTION_OFFSETS[6] = ivec3[6](
+	ivec3(1, 0, 0), ivec3(-1, 0, 0),
+	ivec3(0, 1, 0), ivec3(0, -1, 0),
+	ivec3(0, 0, 1), ivec3(0, 0, -1));
+
+ivec3 directional_texel(ivec3 cell, int direction, int resolution) {
+	return ivec3(cell.x + direction * resolution, cell.y, cell.z);
+}
 
 uint brick_hash(ivec3 position) {
 	return uint(position.x) * 73856093u ^ uint(position.y) * 19349663u ^ uint(position.z) * 83492791u;
@@ -64,35 +75,6 @@ bool world_occupied(vec3 world_position) {
 	return (word & (1u << (local_index & 31u))) != 0u;
 }
 
-bool connection_blocked(vec3 from, vec3 to) {
-	ivec3 cached_brick_position = ivec3(0);
-	uint cached_brick_code = 0u;
-	bool brick_cached = false;
-	for (int sample_index = 1; sample_index <= 3; sample_index++) {
-		float weight = float(sample_index) * 0.25;
-		vec3 world_position = mix(from, to, weight);
-		ivec3 voxel_position = ivec3(floor((world_position - params.world_origin_voxel_size.xyz) / params.world_origin_voxel_size.w));
-		ivec3 brick_position = ivec3(floor(vec3(voxel_position) / 8.0));
-		if (!brick_cached || any(notEqual(brick_position, cached_brick_position))) {
-			cached_brick_position = brick_position;
-			cached_brick_code = find_brick(brick_position);
-			brick_cached = true;
-		}
-		if (cached_brick_code == 1u) {
-			return true;
-		}
-		if (cached_brick_code >= 2u) {
-			ivec3 local_voxel = voxel_position - cached_brick_position * 8;
-			uint local_index = uint(local_voxel.x + local_voxel.y * 8 + local_voxel.z * 64);
-			uint word = mixed_bricks.words[(cached_brick_code - 2u) * 16u + (local_index >> 5u)];
-			if ((word & (1u << (local_index & 31u))) != 0u) {
-				return true;
-			}
-		}
-	}
-	return false;
-}
-
 void main() {
 	ivec3 cell = params.dispatch_origin.xyz + ivec3(gl_GlobalInvocationID.xyz);
 	int resolution = params.grid_directory.x;
@@ -101,29 +83,49 @@ void main() {
 	}
 	vec3 cell_center = params.grid_origin_cell_size.xyz + (vec3(cell) + vec3(0.5)) * params.grid_origin_cell_size.w;
 	if (world_occupied(cell_center)) {
-		imageStore(destination_grid, cell, vec4(0.0));
+		for (int direction_index = 0; direction_index < DIRECTION_COUNT; direction_index++) {
+			imageStore(destination_grid, directional_texel(cell, direction_index, resolution), vec4(0.0));
+		}
 		return;
 	}
 
-	vec3 current = texelFetch(source_grid, cell, 0).rgb;
-	const ivec3 offsets[6] = ivec3[6](
-		ivec3(1, 0, 0), ivec3(-1, 0, 0),
-		ivec3(0, 1, 0), ivec3(0, -1, 0),
-		ivec3(0, 0, 1), ivec3(0, 0, -1));
-	vec3 neighbor_sum = vec3(0.0);
-	float neighbor_count = 0.0;
-	for (int index = 0; index < 6; index++) {
-		ivec3 neighbor = cell + offsets[index];
-		if (any(lessThan(neighbor, ivec3(0))) || any(greaterThanEqual(neighbor, ivec3(resolution)))) {
-			continue;
+	for (int lobe = 0; lobe < DIRECTION_COUNT; lobe++) {
+		ivec3 target_texel = directional_texel(cell, lobe, resolution);
+		vec4 injection = texelFetch(injection_grid, target_texel, 0);
+		vec3 axial_transport = vec3(0.0);
+
+		ivec3 axial_neighbor = cell + DIRECTION_OFFSETS[lobe];
+		if (all(greaterThanEqual(axial_neighbor, ivec3(0))) && all(lessThan(axial_neighbor, ivec3(resolution)))) {
+			// This lobe means that the source is in axial_neighbor. Straight-through
+			// radiance retains full strength. A six-axis field also has to reproject
+			// oblique transport: otherwise energy may spread spatially while keeping
+			// its old lobe, and a side wall samples black even though raw irradiance
+			// visibly reached it. The field stores the strongest reachable diffuse
+			// radiance for each source direction, rather than additive photon energy,
+			// so a turn changes the discrete path direction without an extra loss.
+			// The opposite lobe is deliberately excluded; accepting it would send
+			// energy directly back toward its source and create a two-cell feedback
+			// loop. Max, rather than addition, keeps this coarse angular projection
+			// bounded and independent of how many lobes contain the same source. The
+			// authored propagation decay below is therefore the only per-cell loss;
+			// the former 0.25 turn factor caused an undocumented 0.25^N attenuation
+			// along the alternating-axis paths needed to reach corridor side walls.
+			axial_transport = texelFetch(source_grid, directional_texel(axial_neighbor, lobe, resolution), 0).rgb;
+			int opposite_lobe = lobe ^ 1;
+			for (int source_lobe = 0; source_lobe < DIRECTION_COUNT; source_lobe++) {
+				if (source_lobe == lobe || source_lobe == opposite_lobe) continue;
+				vec3 turned = texelFetch(source_grid, directional_texel(axial_neighbor, source_lobe, resolution), 0).rgb;
+				axial_transport = max(axial_transport, turned);
+			}
+			// Face transmittance is already the geometric attenuation between the
+			// source neighbor and this cell.
+			axial_transport *= injection.a;
 		}
-		vec3 neighbor_center = params.grid_origin_cell_size.xyz + (vec3(neighbor) + vec3(0.5)) * params.grid_origin_cell_size.w;
-		if (connection_blocked(cell_center, neighbor_center)) {
-			continue;
-		}
-		neighbor_sum += texelFetch(source_grid, neighbor, 0).rgb;
-		neighbor_count += 1.0;
+
+		// Injection is a boundary condition, not a source term to accumulate once
+		// per iteration. Max keeps the direct value and the transported field stable
+		// while making propagation_decay the sole per-cell retention control.
+		vec3 result = max(injection.rgb, max(axial_transport, vec3(0.0)) * params.propagation.x);
+		imageStore(destination_grid, target_texel, vec4(min(result, vec3(64.0)), injection.a));
 	}
-	vec3 propagated = neighbor_count > 0.0 ? neighbor_sum / neighbor_count * params.propagation.x : vec3(0.0);
-	imageStore(destination_grid, cell, vec4(max(current, propagated), 1.0));
 }

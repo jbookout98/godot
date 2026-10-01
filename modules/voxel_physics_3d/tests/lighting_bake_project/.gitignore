@@ -1,0 +1,9 @@
+/.godot/
+/fixture_lighting.res
+/fixture_lighting.vlight
+/export_fixture.tscn
+/editor_fixture_lighting.vlight
+/cancelled_fixture_lighting.vlight
+/editor_cancelled_lighting.vlight
+/editor_smoke.vlight
+/editor_smoke_*.log

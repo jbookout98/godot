@@ -3406,6 +3406,23 @@ void RenderForwardClustered::_add_voxel_occupancy_uniforms(Vector<RD::Uniform> &
 	}
 }
 
+void RenderForwardClustered::_add_voxel_local_shadow_uniforms(LocalVector<RD::Uniform> &r_uniforms, bool p_multiview) {
+	RendererRD::TextureStorage *texture_storage = RendererRD::TextureStorage::get_singleton();
+	RendererRD::MaterialStorage *material_storage = RendererRD::MaterialStorage::get_singleton();
+	RD::Uniform masks;
+	masks.binding = 40;
+	masks.uniform_type = RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;
+	masks.append_id(material_storage->sampler_rd_get_default(RSE::CANVAS_ITEM_TEXTURE_FILTER_NEAREST, RSE::CANVAS_ITEM_TEXTURE_REPEAT_DISABLED));
+	masks.append_id(texture_storage->texture_rd_get_default(RendererRD::TextureStorage::DEFAULT_RD_TEXTURE_2D_ARRAY_WHITE));
+	r_uniforms.push_back(masks);
+
+	RD::Uniform params;
+	params.binding = 41;
+	params.uniform_type = RD::UNIFORM_TYPE_UNIFORM_BUFFER;
+	params.append_id(sdfgi_get_ubo());
+	r_uniforms.push_back(params);
+}
+
 void RenderForwardClustered::_update_render_base_uniform_set() {
 	RendererRD::LightStorage *light_storage = RendererRD::LightStorage::get_singleton();
 
@@ -4008,6 +4025,8 @@ RID RenderForwardClustered::_setup_render_pass_uniform_set(RenderListType p_rend
 		u.append_id(texture);
 		uniforms.push_back(u);
 	}
+
+	_add_voxel_local_shadow_uniforms(uniforms, is_multiview);
 
 	return UniformSetCacheRD::get_singleton()->get_cache_vec(scene_shader.default_shader_rd, RENDER_PASS_UNIFORM_SET, uniforms);
 }

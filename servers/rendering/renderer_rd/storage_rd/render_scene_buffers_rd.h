@@ -98,6 +98,10 @@ private:
 	bool use_debanding = false;
 	RD::TextureSamples texture_samples = RD::TEXTURE_SAMPLES_1;
 
+	// Borrowed, completed voxel sunlight snapshot for this viewport/render callback.
+	RID voxel_sunlight_atlas;
+	Vector<float> voxel_sunlight_parameters;
+
 	// Named Textures
 
 	struct NTKey {
@@ -196,6 +200,12 @@ public:
 	float get_luminance_multiplier() const;
 	void set_vrs(RendererRD::VRS *p_vrs) { vrs = p_vrs; }
 	RSE::ViewportVRSMode get_vrs_mode() { return vrs_mode; }
+
+	// The renderer owns the atlas; consumers must not free or retain it across frames.
+	void set_voxel_sunlight_atlas(RID p_atlas, const Vector<float> &p_parameters);
+	void clear_voxel_sunlight_atlas();
+	RID get_voxel_sunlight_atlas() const { return voxel_sunlight_atlas; }
+	Vector<float> get_voxel_sunlight_parameters() const { return voxel_sunlight_parameters; }
 
 	void cleanup();
 	virtual void configure(const RenderSceneBuffersConfiguration *p_config) override;

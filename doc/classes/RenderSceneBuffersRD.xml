@@ -12,6 +12,18 @@
 	<tutorials>
 	</tutorials>
 	<methods>
+		<method name="get_voxel_sunlight_atlas" qualifiers="const">
+			<return type="RID" />
+			<description>
+				Returns the borrowed RenderingDevice texture of the current completed Voxel Forward static-occupancy sunlight atlas. The near and far tiles are side by side. Only use during this viewport's compositor callback; never free or retain it across frames. Returns an invalid RID if unavailable or stale. Off-grid dynamic volumes are not included.
+			</description>
+		</method>
+		<method name="get_voxel_sunlight_parameters" qualifiers="const">
+			<return type="PackedFloat32Array" />
+			<description>
+				Returns 20 floats matching [method get_voxel_sunlight_atlas], or an empty array when unavailable. Five vec4 records contain: atlas center XYZ and voxel size; direction toward sun XYZ and near extent; tangent XYZ and far extent; bitangent XYZ and tile resolution; world voxel origin XYZ and validity. Stored atlas depth is distance from the sunward plane at far extent. Use on the rendering thread during the compositor callback only.
+			</description>
+		</method>
 		<method name="clear_context">
 			<return type="void" />
 			<param index="0" name="context" type="StringName" />

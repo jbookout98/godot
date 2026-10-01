@@ -19,6 +19,16 @@ layout(push_constant, std430) uniform Params {
 }
 params;
 
+const int DIRECTION_COUNT = 6;
+
+ivec3 directional_texel(ivec3 cell, int direction, int resolution) {
+	return ivec3(cell.x + direction * resolution, cell.y, cell.z);
+}
+
+vec3 directional_uvw(vec3 grid_uvw, int direction) {
+	return vec3((float(direction) + grid_uvw.x) / float(DIRECTION_COUNT), grid_uvw.yz);
+}
+
 void main() {
 	ivec3 target_cell = params.dispatch_origin_resolution.xyz + ivec3(gl_GlobalInvocationID.xyz);
 	int resolution = params.dispatch_origin_resolution.w;
@@ -26,20 +36,19 @@ void main() {
 		return;
 	}
 
-	vec3 target = texelFetch(target_grid, target_cell, 0).rgb;
-	vec3 history = params.fallback_radiance_blend.rgb;
-	if (params.state.x != 0) {
-		vec3 world_position = params.target_origin_cell_size.xyz + (vec3(target_cell) + vec3(0.5)) * params.target_origin_cell_size.w;
-		vec3 history_uvw = (world_position - params.history_origin_cell_size.xyz) /
-				(params.history_origin_cell_size.w * float(resolution));
-		// Cell centers at the exact edge are valid. Anything outside the old
-		// cascade has no history and begins at the configured ambient fallback.
-		vec3 half_texel = vec3(0.5 / float(resolution));
-		if (all(greaterThanEqual(history_uvw, half_texel)) && all(lessThanEqual(history_uvw, vec3(1.0) - half_texel))) {
-			history = textureLod(history_grid, history_uvw, 0.0).rgb;
-		}
-	}
-
+	vec3 world_position = params.target_origin_cell_size.xyz + (vec3(target_cell) + vec3(0.5)) * params.target_origin_cell_size.w;
+	vec3 history_uvw = (world_position - params.history_origin_cell_size.xyz) /
+			(params.history_origin_cell_size.w * float(resolution));
+	vec3 half_texel = vec3(0.5 / float(resolution));
+	bool history_valid = params.state.x != 0 && all(greaterThanEqual(history_uvw, half_texel)) && all(lessThanEqual(history_uvw, vec3(1.0) - half_texel));
 	float blend = clamp(params.fallback_radiance_blend.w, 0.0, 1.0);
-	imageStore(output_grid, target_cell, vec4(mix(history, target, blend), 1.0));
+	for (int direction = 0; direction < DIRECTION_COUNT; direction++) {
+		ivec3 texel = directional_texel(target_cell, direction, resolution);
+		vec4 target = texelFetch(target_grid, texel, 0);
+		vec3 history = params.fallback_radiance_blend.rgb;
+		if (history_valid) {
+			history = textureLod(history_grid, directional_uvw(history_uvw, direction), 0.0).rgb;
+		}
+		imageStore(output_grid, texel, vec4(mix(history, target.rgb, blend), target.a));
+	}
 }

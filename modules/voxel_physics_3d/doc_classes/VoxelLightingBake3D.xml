@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="VoxelLightingBake3D" inherits="Node3D" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+ <brief_description>Bakes and loads starting lighting while preserving dynamic DDGI updates.</brief_description>
+ <description>Add one node per world below the authored level root. Select it to use Bake Voxel Lighting in the 3D toolbar. Bake geometry excludes non-static physics bodies and subtrees in the voxel_bake_excluded group. Bounds are in local coordinates. Save the scene after baking so its resource dependency is exported.</description>
+ <tutorials></tutorials>
+ <methods>
+  <method name="bake"><return type="int" enum="Error" /><param index="0" name="save_path" type="String" default="&quot;&quot;" /><description>Starts an asynchronous bake. When save_path is provided, the completed resource is saved before assignment. A failed save or cancellation retains the previous cache.</description></method>
+  <method name="get_bake_description" qualifiers="const"><return type="String" /><description>Describes the current bake view and rendered frame count.</description></method>
+  <method name="cancel_bake"><return type="void" /><description>Cancels without saving or assigning partial data.</description></method>
+  <method name="compute_signature" qualifiers="const"><return type="String" /><description>Returns the deterministic authored lighting fingerprint, or an empty string if the source cannot be fingerprinted.</description></method>
+  <method name="get_bake_progress" qualifiers="const"><return type="float" /><description>Returns approximate progress from zero to one.</description></method>
+  <method name="is_baking" qualifiers="const"><return type="bool" /><description>Returns whether a bake is running.</description></method>
+  <method name="request_cache_status"><return type="void" /><param index="0" name="probe_statistics" type="bool" default="false" /><description>Requests renderer cache diagnostics through cache_status. Enabling probe_statistics performs explicit GPU readback for validation; leave disabled during ordinary gameplay.</description></method>
+ </methods>
+ <members>
+  <member name="lighting_data" type="VoxelLightingData" setter="set_lighting_data" getter="get_lighting_data">Assigned starting-light resource. Missing or stale data uses dynamic lighting.</member>
+  <member name="source_root" type="NodePath" setter="set_source_root" getter="get_source_root" default="NodePath(&quot;..&quot;)">Root containing authored geometry, lights, and environment.</member>
+  <member name="bake_bounds" type="AABB" setter="set_bake_bounds" getter="get_bake_bounds">Local-space region covered by the bake.</member>
+  <member name="settle_frames" type="int" setter="set_settle_frames" getter="get_settle_frames" default="120">Minimum rendered warmup opportunity per view. Probe maturity is checked separately.</member>
+  <member name="max_frames_per_view" type="int" setter="set_max_frames_per_view" getter="get_max_frames_per_view" default="3600">Timeout for a view that does not converge.</member>
+ </members>
+ <signals>
+  <signal name="bake_progress"><param index="0" name="progress" type="float" /><description>Emitted while baking.</description></signal>
+  <signal name="bake_finished"><param index="0" name="error" type="String" /><description>Empty on success; otherwise describes failure or cancellation.</description></signal>
+  <signal name="cache_status"><param index="0" name="status" type="Dictionary" /><description>Renderer diagnostics including restored_probes and invalidated when a cache is registered.</description></signal>
+ </signals>
+</class>

@@ -1,0 +1,4 @@
+[gd_resource type="VoxelMaterial" format=3]
+[resource]
+ambient_occlusion_enabled = false
+outline_enabled = false

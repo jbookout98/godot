@@ -8,7 +8,7 @@
 
 static Vector4 _make_voxelized_ao_curve(real_t p_hardness, real_t p_strength) {
 	const real_t exponent = Math::pow(real_t(2.0), (CLAMP(p_hardness, real_t(0.0), real_t(1.0)) - real_t(0.5)) * real_t(4.0));
-	const real_t strength = CLAMP(p_strength, real_t(0.0), real_t(4.0));
+	const real_t strength = CLAMP(p_strength, real_t(0.0), real_t(1.0));
 	return Vector4(
 			MIN(Math::pow(real_t(0.25), exponent) * strength, real_t(1.0)),
 			MIN(Math::pow(real_t(0.5), exponent) * strength, real_t(1.0)),
@@ -17,7 +17,33 @@ static Vector4 _make_voxelized_ao_curve(real_t p_hardness, real_t p_strength) {
 }
 
 static const char *VOXEL_FORWARD_INDIRECT_FUNCTIONS = R"SHADER(
-vec3 sample_voxel_forward_indirect_grid(sampler3D grid, vec3 origin, float cell_size, vec3 world_position, out float edge_weight) {
+vec3 voxel_gi_directional_uvw(vec3 grid_uvw, int direction) {
+	return vec3((float(direction) + grid_uvw.x) / 6.0, grid_uvw.yz);
+}
+
+vec4 voxel_gi_debug_grid_value(sampler3D grid, vec3 origin, float cell_size, vec3 world_position, int direction) {
+	vec3 uvw = (world_position - origin) / (cell_size * float(voxel_forward_indirect_resolution));
+	if (any(lessThan(uvw, vec3(0.0))) || any(greaterThanEqual(uvw, vec3(1.0)))) return vec4(0.0);
+	vec3 half_texel = vec3(0.5 / float(voxel_forward_indirect_resolution));
+	uvw = clamp(uvw, half_texel, vec3(1.0) - half_texel);
+	return textureLod(grid, voxel_gi_directional_uvw(uvw, direction), 0.0);
+}
+
+vec4 voxel_gi_debug_value(vec3 world_position, float selected_cascade, int direction) {
+	if (selected_cascade < 0.5) return voxel_gi_debug_grid_value(voxel_forward_indirect_near, voxel_forward_indirect_near_origin, voxel_forward_indirect_near_cell_size, world_position, direction);
+	if (selected_cascade < 1.5) return voxel_gi_debug_grid_value(voxel_forward_indirect_far, voxel_forward_indirect_far_origin, voxel_forward_indirect_far_cell_size, world_position, direction);
+	return voxel_gi_debug_grid_value(voxel_forward_indirect_distant, voxel_forward_indirect_distant_origin, voxel_forward_indirect_distant_cell_size, world_position, direction);
+}
+
+// Lobe convention: +X stores radiance arriving from a source on the +X side
+// of the sample. Injection, propagation, surface lookup, and debug labels all
+// use this same source-relative convention.
+vec4 voxel_gi_texel(sampler3D grid, ivec3 cell, int direction, int resolution) {
+	return texelFetch(grid, ivec3(cell.x + direction * resolution, cell.y, cell.z), 0);
+}
+
+vec3 sample_voxel_forward_indirect_grid(sampler3D grid, vec3 origin, float cell_size, vec3 world_position, vec3 world_normal, out float edge_weight, out float gather_visibility) {
+	gather_visibility = 0.0;
 	vec3 uvw = (world_position - origin) / (cell_size * float(voxel_forward_indirect_resolution));
 	vec3 edge = min(uvw, vec3(1.0) - uvw);
 	float minimum_edge = min(edge.x, min(edge.y, edge.z));
@@ -26,22 +52,320 @@ vec3 sample_voxel_forward_indirect_grid(sampler3D grid, vec3 origin, float cell_
 	if (minimum_edge <= 0.0) {
 		return vec3(0.0);
 	}
-	return textureLod(grid, uvw, 0.0).rgb;
+	int resolution = voxel_forward_indirect_resolution;
+	vec3 cell_position = (world_position - origin) / cell_size - vec3(0.5);
+	ivec3 base_cell = ivec3(floor(cell_position));
+	vec3 fraction = fract(cell_position);
+	ivec3 anchor_cell = clamp(ivec3(floor((world_position - origin) / cell_size)), ivec3(0), ivec3(resolution - 1));
+	vec3 axis_weight = abs(world_normal);
+	float direction_weight_sum = max(axis_weight.x + axis_weight.y + axis_weight.z, 0.0001);
+	int x_lobe = world_normal.x >= 0.0 ? 0 : 1;
+	int y_lobe = world_normal.y >= 0.0 ? 2 : 3;
+	int z_lobe = world_normal.z >= 0.0 ? 4 : 5;
+	float anchor_faces[6];
+	for (int direction = 0; direction < 6; direction++) {
+		anchor_faces[direction] = voxel_gi_texel(grid, anchor_cell, direction, resolution).a;
+	}
+	vec3 irradiance = vec3(0.0);
+	float surviving_weight = 0.0;
+	float candidate_weight = 0.0;
+	for (int corner = 0; corner < 8; corner++) {
+		ivec3 offset = ivec3(corner & 1, (corner >> 1) & 1, (corner >> 2) & 1);
+		ivec3 cell = base_cell + offset;
+		if (any(lessThan(cell, ivec3(0))) || any(greaterThanEqual(cell, ivec3(resolution)))) continue;
+		vec3 corner_weight = mix(vec3(1.0) - fraction, fraction, vec3(offset));
+		float trilinear_weight = corner_weight.x * corner_weight.y * corner_weight.z;
+		candidate_weight += trilinear_weight;
+		ivec3 delta = cell - anchor_cell;
+		float visibility = 1.0;
+		// Requiring every crossed anchor face to be open is a conservative
+		// supercover rule. A tied diagonal/corner crossing therefore cannot leak
+		// merely because one arbitrary axis ordering happened to be open.
+		if (delta.x > 0) visibility *= anchor_faces[0];
+		if (delta.x < 0) visibility *= anchor_faces[1];
+		if (delta.y > 0) visibility *= anchor_faces[2];
+		if (delta.y < 0) visibility *= anchor_faces[3];
+		if (delta.z > 0) visibility *= anchor_faces[4];
+		if (delta.z < 0) visibility *= anchor_faces[5];
+		float weight = trilinear_weight * visibility;
+		if (weight <= 0.000001) continue;
+		vec3 directional = vec3(0.0);
+		if (axis_weight.x > 0.0001) directional += voxel_gi_texel(grid, cell, x_lobe, resolution).rgb * axis_weight.x;
+		if (axis_weight.y > 0.0001) directional += voxel_gi_texel(grid, cell, y_lobe, resolution).rgb * axis_weight.y;
+		if (axis_weight.z > 0.0001) directional += voxel_gi_texel(grid, cell, z_lobe, resolution).rgb * axis_weight.z;
+		irradiance += directional * (weight / direction_weight_sum);
+		surviving_weight += weight;
+	}
+	gather_visibility = candidate_weight > 0.000001 ? surviving_weight / candidate_weight : 0.0;
+	// Spatial coverage remains valid even when every neighboring contribution is
+	// rejected. Returning black here represents known occlusion, not missing GI,
+	// so the caller must not replace it with ambient fallback.
+	return surviving_weight > 0.000001 ? irradiance / surviving_weight : vec3(0.0);
 }
 
-vec3 sample_voxel_forward_indirect(vec3 world_position) {
+vec3 sample_voxel_forward_indirect(vec3 world_position, vec3 world_normal, out float coverage, out float selected_cascade, out float gather_visibility) {
+	coverage = 0.0;
+	selected_cascade = -1.0;
+	gather_visibility = 0.0;
 	if (!voxel_forward_indirect_ready || voxel_forward_indirect_resolution <= 1) {
 		return vec3(0.0);
 	}
 	float distant_weight;
-	vec3 distant_light = sample_voxel_forward_indirect_grid(voxel_forward_indirect_distant, voxel_forward_indirect_distant_origin, voxel_forward_indirect_distant_cell_size, world_position, distant_weight);
+	float distant_visibility;
+	vec3 distant_light = sample_voxel_forward_indirect_grid(voxel_forward_indirect_distant, voxel_forward_indirect_distant_origin, voxel_forward_indirect_distant_cell_size, world_position, world_normal, distant_weight, distant_visibility);
 	vec3 indirect_light = distant_light * distant_weight;
+	coverage = distant_weight;
+	gather_visibility = distant_visibility * distant_weight;
+	selected_cascade = distant_weight > 0.0 ? 2.0 : -1.0;
 	float far_weight;
-	vec3 far_light = sample_voxel_forward_indirect_grid(voxel_forward_indirect_far, voxel_forward_indirect_far_origin, voxel_forward_indirect_far_cell_size, world_position, far_weight);
+	float far_visibility;
+	vec3 far_light = sample_voxel_forward_indirect_grid(voxel_forward_indirect_far, voxel_forward_indirect_far_origin, voxel_forward_indirect_far_cell_size, world_position, world_normal, far_weight, far_visibility);
 	indirect_light = mix(indirect_light, far_light, far_weight);
+	coverage = mix(coverage, 1.0, far_weight);
+	gather_visibility = mix(gather_visibility, far_visibility, far_weight);
+	selected_cascade = far_weight > 0.5 ? 1.0 : selected_cascade;
 	float near_weight;
-	vec3 near_light = sample_voxel_forward_indirect_grid(voxel_forward_indirect_near, voxel_forward_indirect_near_origin, voxel_forward_indirect_near_cell_size, world_position, near_weight);
-	return mix(indirect_light, near_light, near_weight);
+	float near_visibility;
+	vec3 near_light = sample_voxel_forward_indirect_grid(voxel_forward_indirect_near, voxel_forward_indirect_near_origin, voxel_forward_indirect_near_cell_size, world_position, world_normal, near_weight, near_visibility);
+	indirect_light = mix(indirect_light, near_light, near_weight);
+	coverage = mix(coverage, 1.0, near_weight);
+	gather_visibility = mix(gather_visibility, near_visibility, near_weight);
+	selected_cascade = near_weight > 0.5 ? 0.0 : selected_cascade;
+	return indirect_light;
+}
+)SHADER";
+
+static const char *VOXEL_FORWARD_DDGI_FUNCTIONS = R"SHADER(
+vec3 voxel_ddgi_decode_interpolation_sample(vec3 encoded_irradiance) {
+	// Irradiance is stored with a fifth-root perceptual encoding. Convert each
+	// probe to sqrt(linear) before spatial interpolation, then square the final
+	// average. Decoding after interpolation exaggerates dark probe-to-probe
+	// differences and exposes the logical lattice as broad blotches.
+	return pow(max(encoded_irradiance, vec3(0.0)), vec3(2.5));
+}
+
+vec3 voxel_ddgi_finish_interpolation(vec3 sqrt_linear_irradiance) {
+	return sqrt_linear_irradiance * sqrt_linear_irradiance;
+}
+
+vec2 voxel_ddgi_oct_encode(vec3 direction) {
+	direction /= max(abs(direction.x) + abs(direction.y) + abs(direction.z), 0.00001);
+	vec2 encoded = direction.xz;
+	if (direction.y < 0.0) encoded = (1.0 - abs(encoded.yx)) * sign(encoded.xy);
+	return encoded * 0.5 + 0.5;
+}
+
+vec2 voxel_ddgi_tile_uv(ivec2 tile, int tile_size, int interior_size, vec2 oct, vec2 atlas_size) {
+	// Every probe owns a one-texel guard border. Sample only between interior
+	// texel centres; filtering therefore remains inside this probe's tile.
+	vec2 pixel = vec2(tile * tile_size) + vec2(1.5) + clamp(oct, vec2(0.0), vec2(1.0)) * float(interior_size - 1);
+	return pixel / atlas_size;
+}
+
+uint voxel_ddgi_probe_generation(ivec4 logical_cell_lod) {
+	uvec4 bits = uvec4(logical_cell_lod);
+	uint hash = 2166136261u;
+	hash = (hash ^ bits.x) * 16777619u;
+	hash = (hash ^ bits.y) * 16777619u;
+	hash = (hash ^ bits.z) * 16777619u;
+	hash = (hash ^ bits.w) * 16777619u;
+	return hash & 0xfffffu;
+}
+
+vec3 voxel_ddgi_probe_sample(sampler2D irradiance_atlas, sampler2D visibility_atlas, sampler2D metadata_atlas,
+		ivec3 probe, ivec3 phase_offset, ivec3 logical_origin, int lod, vec3 biased_position, vec3 world_normal, float visibility_bias_distance, out float visibility_weight,
+		out float support_weight, out float geometric_visibility, out float in_front_weight, out vec3 probe_position) {
+	visibility_weight = 0.0;
+	support_weight = 0.0;
+	geometric_visibility = 0.0;
+	in_front_weight = 0.0;
+	probe_position = vec3(0.0);
+	int resolution = voxel_forward_ddgi_probe_resolution;
+	if (any(lessThan(probe, ivec3(0))) || any(greaterThanEqual(probe, ivec3(resolution)))) {
+		return vec3(0.0);
+	}
+	ivec3 physical = ivec3((probe.x + phase_offset.x) % resolution, (probe.y + phase_offset.y) % resolution, (probe.z + phase_offset.z) % resolution);
+	int probe_index = physical.x + physical.y * resolution + physical.z * resolution * resolution;
+	ivec2 tile = ivec2(probe_index % (resolution * resolution), probe_index / (resolution * resolution));
+	vec4 metadata = texelFetch(metadata_atlas, tile, 0);
+	probe_position = metadata.xyz;
+	uint packed_metadata = uint(max(metadata.w, 0.0) + 0.5);
+	uint state = packed_metadata & 15u;
+	uint generation = packed_metadata >> 4u;
+	uint expected_generation = voxel_ddgi_probe_generation(ivec4(logical_origin + probe, lod));
+	// New and retiring records transfer ownership continuously through atlas
+	// confidence. The generation check prevents a toroidal slot's former content
+	// from becoming visible under its replacement logical identity.
+	if (generation != expected_generation || (state != 1u && state != 2u && state != 3u && state != 4u && state != 5u && state != 6u && state != 7u && state != 8u)) {
+		return vec3(0.0);
+	}
+	vec3 probe_to_surface = biased_position - metadata.xyz;
+	float distance_to_surface = length(probe_to_surface);
+	vec3 direction_to_surface = distance_to_surface > 0.0001 ? probe_to_surface / distance_to_surface : world_normal;
+	vec2 irradiance_uv = voxel_ddgi_tile_uv(tile, 10, 8, voxel_ddgi_oct_encode(world_normal), voxel_forward_ddgi_irradiance_atlas_size);
+	vec2 visibility_uv = voxel_ddgi_tile_uv(tile, 18, 16, voxel_ddgi_oct_encode(direction_to_surface), voxel_forward_ddgi_visibility_atlas_size);
+	vec4 irradiance = textureLod(irradiance_atlas, irradiance_uv, 0.0);
+	vec4 moments = textureLod(visibility_atlas, visibility_uv, 0.0);
+	if (irradiance.a <= 0.0 || moments.a <= 0.0 || moments.x <= 0.0) {
+		return vec3(0.0);
+	}
+	float confidence = clamp(min(irradiance.a, moments.a), 0.0, 1.0);
+	// Keep a continuous contribution from probes near or behind the tangent
+	// plane. A clamped cosine makes whole probe groups disappear at zero and
+	// exposes the probe grid as moving planes. This is the production RTXGI
+	// wrap-shading weight; depth moments remain responsible for occlusion.
+	float wrap_shading = (dot(world_normal, -direction_to_surface) + 1.0) * 0.5;
+	float directional_weight = wrap_shading * wrap_shading + 0.2;
+	support_weight = confidence;
+	in_front_weight = directional_weight;
+
+	float mean_depth = moments.x;
+	float variance_floor = max(visibility_bias_distance * visibility_bias_distance * 0.0625, 0.000001);
+	float variance = max(moments.y - mean_depth * mean_depth, variance_floor);
+	float biased_distance = distance_to_surface;
+	float depth_visibility = 1.0;
+	if (biased_distance > mean_depth) {
+		float delta = biased_distance - mean_depth;
+		depth_visibility = variance / (variance + delta * delta);
+		depth_visibility = depth_visibility * depth_visibility * depth_visibility;
+	}
+	// Never let every probe reach exactly zero. Besides providing a stable
+	// fallback this keeps the interpolation continuous as depth texels change.
+	depth_visibility = max(0.05, depth_visibility);
+	geometric_visibility = max(directional_weight * depth_visibility, 0.000001);
+	const float crush_threshold = 0.2;
+	if (geometric_visibility < crush_threshold) {
+		geometric_visibility *= geometric_visibility * geometric_visibility / (crush_threshold * crush_threshold);
+	}
+	visibility_weight = support_weight * geometric_visibility;
+	return irradiance.rgb;
+}
+
+vec3 voxel_ddgi_lod_sample(sampler2D irradiance_atlas, sampler2D visibility_atlas, sampler2D metadata_atlas,
+		vec3 origin, vec3 cell_size, ivec3 phase_offset, ivec3 logical_origin, int lod, vec3 world_position, vec3 world_normal, vec3 view_direction, out float edge_weight,
+		out float initialized_support, out float final_visibility, out float final_in_front) {
+	view_direction = normalize(view_direction);
+	float minimum_spacing = min(cell_size.x, min(cell_size.y, cell_size.z));
+	vec3 bias_direction = mix(world_normal, view_direction, voxel_forward_ddgi_view_bias);
+	vec3 bias_vector = bias_direction * (0.75 * minimum_spacing) * voxel_forward_ddgi_self_shadow_bias;
+	float visibility_bias_distance = length(bias_vector);
+	vec3 biased_position = world_position + bias_vector;
+	vec3 local = (biased_position - origin) / cell_size - vec3(0.5);
+	ivec3 base = ivec3(floor(local));
+	vec3 fraction = fract(local);
+	vec3 accumulated = vec3(0.0);
+	float visible_weight = 0.0;
+	float supported_weight = 0.0;
+	float geometry_sum = 0.0;
+	float in_front_sum = 0.0;
+	float basis_weight_sum = 0.0;
+	initialized_support = 0.0;
+	for (int z = 0; z <= 1; z++) {
+		for (int y = 0; y <= 1; y++) {
+			for (int x = 0; x <= 1; x++) {
+				ivec3 offset = ivec3(x, y, z);
+				vec3 axis_weight = mix(vec3(1.0) - fraction, fraction, vec3(offset));
+				float ideal_weight = axis_weight.x * axis_weight.y * axis_weight.z;
+				float visibility_weight;
+				float support_weight;
+				float geometry_visibility;
+				float in_front_weight;
+				vec3 probe_position;
+				vec3 value = voxel_ddgi_probe_sample(irradiance_atlas, visibility_atlas, metadata_atlas, base + offset, phase_offset, logical_origin, lod, biased_position, world_normal, visibility_bias_distance, visibility_weight, support_weight, geometry_visibility, in_front_weight, probe_position);
+				// Relocation changes visibility and ray origins, not the logical grid
+				// basis. Grid trilinear weights form a partition of unity across cell
+				// boundaries; rebuilding the basis around relocated positions does not.
+				float trilinear_weight = ideal_weight;
+				basis_weight_sum += trilinear_weight;
+				float combined_weight = trilinear_weight * visibility_weight;
+				accumulated += voxel_ddgi_decode_interpolation_sample(value) * combined_weight;
+				visible_weight += combined_weight;
+				initialized_support += trilinear_weight * support_weight;
+				supported_weight += trilinear_weight * support_weight;
+				geometry_sum += trilinear_weight * support_weight * geometry_visibility;
+				in_front_sum += trilinear_weight * support_weight * in_front_weight;
+			}
+		}
+	}
+	float inverse_basis_weight = 1.0 / max(basis_weight_sum, 0.0001);
+	initialized_support *= inverse_basis_weight;
+	supported_weight *= inverse_basis_weight;
+	geometry_sum *= inverse_basis_weight;
+	in_front_sum *= inverse_basis_weight;
+	vec3 probe_local = (biased_position - origin) / cell_size;
+	vec3 sample_edge_distance = min(probe_local - vec3(0.5), vec3(float(voxel_forward_ddgi_probe_resolution) - 0.5) - probe_local);
+	float transition_cells = max(voxel_forward_ddgi_lod_transition * float(voxel_forward_ddgi_probe_resolution), 0.25);
+	// Circular origins move in whole cells. Deriving the fade only from that
+	// origin makes the cascade contribution jump at every phase change. Center
+	// the usable region continuously on the camera and keep the outer probe layer
+	// at zero so a newly exposed plane matures behind its parent cascade.
+	vec3 camera_distance_cells = abs((biased_position - voxel_forward_ddgi_camera_position) / cell_size);
+	float camera_edge_distance = float(voxel_forward_ddgi_probe_resolution) * 0.5 - 1.5 - max(camera_distance_cells.x, max(camera_distance_cells.y, camera_distance_cells.z));
+	float resident_edge_distance = min(sample_edge_distance.x, min(sample_edge_distance.y, sample_edge_distance.z));
+	edge_weight = smoothstep(0.0, transition_cells, min(camera_edge_distance, resident_edge_distance));
+	initialized_support = clamp(initialized_support, 0.0, 1.0);
+	final_visibility = supported_weight > 0.0001 ? clamp(geometry_sum / supported_weight, 0.0, 1.0) : 0.0;
+	final_in_front = supported_weight > 0.0001 ? clamp(in_front_sum / supported_weight, 0.0, 1.0) : 0.0;
+	// Normalize exactly once. The former second multiplication by visible_weight
+	// projected the trilinear probe lattice onto otherwise flat surfaces.
+	return visible_weight > 0.0001 ? voxel_ddgi_finish_interpolation(accumulated / visible_weight) : vec3(0.0);
+}
+
+bool voxel_ddgi_lod_contains(vec3 origin, vec3 cell_size, vec3 world_position, vec3 world_normal) {
+	vec3 local = (world_position - origin) / cell_size;
+	return all(greaterThanEqual(local, vec3(0.5))) && all(lessThanEqual(local, vec3(float(voxel_forward_ddgi_probe_resolution) - 0.5)));
+}
+
+)SHADER";
+
+static const char *VOXEL_FORWARD_DDGI_CASCADE_FUNCTIONS = R"SHADER(
+vec3 voxel_ddgi_sample_lod_index(int lod, vec3 world_position, vec3 world_normal, vec3 view_direction, out float edge_weight,
+		out float support, out float visibility, out float in_front) {
+	if (lod == 0) return voxel_ddgi_lod_sample(voxel_forward_ddgi_irradiance_lod0, voxel_forward_ddgi_depth_lod0, voxel_forward_ddgi_metadata_lod0, voxel_forward_ddgi_origin_lod0, voxel_forward_ddgi_cell_size_lod0, voxel_forward_ddgi_phase_lod0, voxel_forward_ddgi_logical_origin_lod0, 0, world_position, world_normal, view_direction, edge_weight, support, visibility, in_front);
+	if (lod == 1) return voxel_ddgi_lod_sample(voxel_forward_ddgi_irradiance_lod1, voxel_forward_ddgi_depth_lod1, voxel_forward_ddgi_metadata_lod1, voxel_forward_ddgi_origin_lod1, voxel_forward_ddgi_cell_size_lod1, voxel_forward_ddgi_phase_lod1, voxel_forward_ddgi_logical_origin_lod1, 1, world_position, world_normal, view_direction, edge_weight, support, visibility, in_front);
+	if (lod == 2) return voxel_ddgi_lod_sample(voxel_forward_ddgi_irradiance_lod2, voxel_forward_ddgi_depth_lod2, voxel_forward_ddgi_metadata_lod2, voxel_forward_ddgi_origin_lod2, voxel_forward_ddgi_cell_size_lod2, voxel_forward_ddgi_phase_lod2, voxel_forward_ddgi_logical_origin_lod2, 2, world_position, world_normal, view_direction, edge_weight, support, visibility, in_front);
+	return voxel_ddgi_lod_sample(voxel_forward_ddgi_irradiance_lod3, voxel_forward_ddgi_depth_lod3, voxel_forward_ddgi_metadata_lod3, voxel_forward_ddgi_origin_lod3, voxel_forward_ddgi_cell_size_lod3, voxel_forward_ddgi_phase_lod3, voxel_forward_ddgi_logical_origin_lod3, 3, world_position, world_normal, view_direction, edge_weight, support, visibility, in_front);
+}
+
+bool voxel_ddgi_contains_lod_index(int lod, vec3 world_position, vec3 world_normal) {
+	if (lod == 0) return voxel_ddgi_lod_contains(voxel_forward_ddgi_origin_lod0, voxel_forward_ddgi_cell_size_lod0, world_position, world_normal);
+	if (lod == 1) return voxel_ddgi_lod_contains(voxel_forward_ddgi_origin_lod1, voxel_forward_ddgi_cell_size_lod1, world_position, world_normal);
+	if (lod == 2) return voxel_ddgi_lod_contains(voxel_forward_ddgi_origin_lod2, voxel_forward_ddgi_cell_size_lod2, world_position, world_normal);
+	return voxel_ddgi_lod_contains(voxel_forward_ddgi_origin_lod3, voxel_forward_ddgi_cell_size_lod3, world_position, world_normal);
+}
+
+vec3 sample_voxel_forward_ddgi(vec3 world_position, vec3 world_normal, vec3 view_direction, out float final_visibility,
+		out float data_support, out float selected_lod, out float final_in_front) {
+	final_visibility = 0.0;
+	data_support = 0.0;
+	selected_lod = -1.0;
+	final_in_front = 0.0;
+	if (!voxel_forward_ddgi_ready || voxel_forward_ddgi_probe_resolution < 2) return vec3(0.0);
+	vec3 result = vec3(0.0);
+	float remaining = 1.0;
+	float visibility_sum = 0.0;
+	float in_front_sum = 0.0;
+	float lod_sum = 0.0;
+	for (int lod = 0; lod < 4 && remaining > 0.001; lod++) {
+		if (!voxel_ddgi_contains_lod_index(lod, world_position, world_normal)) continue;
+		float edge; float support; float visibility; float in_front;
+		vec3 value = voxel_ddgi_sample_lod_index(lod, world_position, world_normal, view_direction, edge, support, visibility, in_front);
+		float maturity = smoothstep(0.0, 1.0, support);
+		float local_weight = clamp((lod == 3 ? 1.0 : edge) * maturity, 0.0, 1.0);
+		float weight = remaining * local_weight;
+		result += value * weight;
+		visibility_sum += visibility * weight;
+		in_front_sum += in_front * weight;
+		lod_sum += float(lod) * weight;
+		data_support += weight;
+		remaining -= weight;
+	}
+	if (data_support > 0.0001) {
+		final_visibility = visibility_sum / data_support;
+		final_in_front = in_front_sum / data_support;
+		selected_lod = lod_sum / data_support;
+	}
+	return result;
 }
 )SHADER";
 
@@ -207,6 +531,14 @@ uniform int max_fine_steps = 32;
 global uniform sampler2D voxel_forward_shadow_mask : filter_nearest, repeat_disable;
 global uniform vec3 voxel_forward_shadow_light_direction;
 global uniform bool voxel_forward_shadow_ready;
+global uniform bool voxel_forward_toon_enabled;
+global uniform int voxel_forward_ddgi_toon_band_count;
+global uniform float voxel_forward_ddgi_toon_band_softness;
+global uniform float voxel_forward_ddgi_toon_band_range;
+global uniform bool voxel_forward_toon_specular_enabled;
+global uniform float voxel_forward_toon_specular_threshold;
+global uniform float voxel_forward_toon_specular_softness;
+global uniform float voxel_forward_toon_specular_strength;
 // VOXEL_FORWARD_INDIRECT_UNIFORMS
 global uniform vec4 voxel_forward_ambient_color : source_color;
 global uniform float voxel_forward_ambient_energy;
@@ -307,6 +639,12 @@ uint voxel_id_at(ivec3 voxel) {
 	return uint(texelFetch(u_voxels, atlas_texel, 0).r * 255.0 + 0.5);
 }
 
+bool voxel_id_is_renderable(uint voxel_id) {
+	if (voxel_id == 0u) return false;
+	// TRANSPARENCY_OCCUPANCY_CHECK
+	return true;
+}
+
 uint voxel_ao_id_at(ivec3 voxel, inout ivec3 cached_brick, inout uvec4 cached_directory_bytes) {
 	int outside_axis_count = 0;
 	ivec3 offset = ivec3(0);
@@ -370,6 +708,17 @@ float voxel_forward_schlick(float value) {
 	return m2 * m2 * m;
 }
 
+float voxel_forward_toon_quantize(float value, float band_range) {
+	float safe_range = max(band_range, 0.0001);
+	float band_steps = float(max(voxel_forward_ddgi_toon_band_count - 1, 1));
+	float band_coordinate = clamp(value / safe_range, 0.0, 1.0) * band_steps;
+	float lower_band = floor(band_coordinate);
+	float transition_width = max(fwidth(band_coordinate), max(voxel_forward_ddgi_toon_band_softness * 0.5, 0.0001));
+	float upper_band_weight = smoothstep(0.5 - transition_width, 0.5 + transition_width, fract(band_coordinate));
+	float band_value = ((lower_band + upper_band_weight) / band_steps) * safe_range;
+	return value > safe_range ? value : band_value;
+}
+
 void light() {
 	float normal_dot_light = max(dot(NORMAL, LIGHT), 0.0);
 	if (normal_dot_light > 0.0) {
@@ -395,16 +744,30 @@ void light() {
 			float fd90_minus_1 = 2.0 * light_dot_half * light_dot_half * ROUGHNESS - 0.5;
 			float fd_view = 1.0 + fd90_minus_1 * voxel_forward_schlick(normal_dot_view);
 			float fd_light = 1.0 + fd90_minus_1 * voxel_forward_schlick(normal_dot_light);
-			float diffuse_brdf_nl = (1.0 / PI) * fd_view * fd_light * normal_dot_light;
-			DIFFUSE_LIGHT += LIGHT_COLOR * diffuse_brdf_nl * visibility;
+			float direct_diffuse_response = normal_dot_light * visibility;
+			if (voxel_forward_toon_enabled && voxel_forward_ddgi_toon_band_count >= 2) {
+				// Band the complete direct response so both face lighting and soft
+				// shadow transitions use the same designer-controlled toon ramp.
+				direct_diffuse_response = voxel_forward_toon_quantize(direct_diffuse_response, 1.0);
+			}
+			float diffuse_brdf = (1.0 / PI) * fd_view * fd_light;
+			DIFFUSE_LIGHT += LIGHT_COLOR * diffuse_brdf * direct_diffuse_response;
 
 			// Point-like lights use one discrete specular response for the complete
 			// face. A screen-space GGX lobe makes tiny DDA side faces flare into the
 			// chunk-edge lines this renderer is designed to avoid.
 			float specular_power = mix(64.0, 4.0, ROUGHNESS);
 			float face_specular = pow(normal_dot_light, specular_power);
+			float specular_response = face_specular * visibility;
+			if (voxel_forward_toon_enabled && voxel_forward_toon_specular_enabled) {
+				float highlight_width = max(fwidth(specular_response), max(voxel_forward_toon_specular_softness * 0.5, 0.0001));
+				specular_response = smoothstep(
+						voxel_forward_toon_specular_threshold - highlight_width,
+						voxel_forward_toon_specular_threshold + highlight_width,
+						specular_response) * voxel_forward_toon_specular_strength;
+			}
 			vec3 f0 = mix(vec3(0.04), ALBEDO, METALLIC);
-			SPECULAR_LIGHT += f0 * face_specular * LIGHT_COLOR * visibility * SPECULAR_AMOUNT;
+			SPECULAR_LIGHT += f0 * specular_response * LIGHT_COLOR * SPECULAR_AMOUNT;
 		}
 	}
 }
@@ -482,7 +845,7 @@ void fragment() {
 		uint directory_code = directory_bytes.r | (directory_bytes.g << 8u) | (directory_bytes.b << 16u);
 		if (directory_code == 1u) {
 			hit_id = directory_bytes.a;
-			hit = hit_id > 0u;
+			hit = voxel_id_is_renderable(hit_id);
 			hit_t = max(brick_enter_t, start_t);
 			hit_axis = brick_entry_axis;
 			hit_voxel = ivec3(clamp(floor(ray_origin + ray_direction * (hit_t + EPSILON)), vec3(0.0), dimensions - vec3(1.0)));
@@ -512,7 +875,7 @@ void fragment() {
 			for (int fine = 0; fine < max_fine_steps; fine++) {
 				ivec3 atlas_texel = atlas_brick * int(BRICK_SIZE) + voxel_coordinate - brick_minimum_i;
 				hit_id = uint(texelFetch(u_voxels, atlas_texel, 0).r * 255.0 + 0.5);
-				if (hit_id > 0u) {
+				if (voxel_id_is_renderable(hit_id)) {
 					hit = true;
 					hit_t = max(voxel_enter_t, start_t);
 					hit_axis = voxel_entry_axis;
@@ -589,6 +952,7 @@ void fragment() {
 	// ARCH_DEPTH_PATH_END
 
 	NORMAL = normalize(mat3(VIEW_MATRIX) * (MODEL_NORMAL_MATRIX * local_normal));
+	vec2 palette_uv = vec2((float(hit_id) + 0.5) / 256.0, 0.5);
 
 	// AO_OUTPUT
 
@@ -603,7 +967,6 @@ void fragment() {
 	// LIGHTING_VERTEX_OUTPUT
 	// VOXEL_OCCUPANCY_ENABLE
 
-	vec2 palette_uv = vec2((float(hit_id) + 0.5) / 256.0, 0.5);
 	vec3 palette_color = textureLod(u_palette, palette_uv, 0.0).rgb;
 	vec4 material_sample = textureLod(u_material, palette_uv, 0.0);
 	// MATERIAL_CHANNEL_OUTPUTS
@@ -637,6 +1000,8 @@ enum VoxelShaderFeature : uint32_t {
 	VOXEL_SHADER_ARCHITECTURAL_HIT_POSITION = 1u << 15,
 	VOXEL_SHADER_PRECOMPUTED_INVERSE = 1u << 16,
 	VOXEL_SHADER_BATCHED_RESOURCES = 1u << 17,
+	VOXEL_SHADER_AO_TINT = 1u << 18,
+	VOXEL_SHADER_AO_TINT_PALETTE = 1u << 19,
 };
 
 static HashMap<uint32_t, Ref<Shader>> voxel_shader_cache;
@@ -654,8 +1019,20 @@ void VoxelMaterial::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_ambient_occlusion_color"), &VoxelMaterial::get_ambient_occlusion_color);
 	ClassDB::bind_method(D_METHOD("set_ambient_occlusion_strength", "strength"), &VoxelMaterial::set_ambient_occlusion_strength);
 	ClassDB::bind_method(D_METHOD("get_ambient_occlusion_strength"), &VoxelMaterial::get_ambient_occlusion_strength);
+	ClassDB::bind_method(D_METHOD("set_ambient_occlusion_intensity", "intensity"), &VoxelMaterial::set_ambient_occlusion_intensity);
+	ClassDB::bind_method(D_METHOD("get_ambient_occlusion_intensity"), &VoxelMaterial::get_ambient_occlusion_intensity);
 	ClassDB::bind_method(D_METHOD("set_ambient_occlusion_hardness", "hardness"), &VoxelMaterial::set_ambient_occlusion_hardness);
 	ClassDB::bind_method(D_METHOD("get_ambient_occlusion_hardness"), &VoxelMaterial::get_ambient_occlusion_hardness);
+	ClassDB::bind_method(D_METHOD("set_ambient_occlusion_contrast", "contrast"), &VoxelMaterial::set_ambient_occlusion_contrast);
+	ClassDB::bind_method(D_METHOD("get_ambient_occlusion_contrast"), &VoxelMaterial::get_ambient_occlusion_contrast);
+	ClassDB::bind_method(D_METHOD("set_ambient_occlusion_direct_light_influence", "influence"), &VoxelMaterial::set_ambient_occlusion_direct_light_influence);
+	ClassDB::bind_method(D_METHOD("get_ambient_occlusion_direct_light_influence"), &VoxelMaterial::get_ambient_occlusion_direct_light_influence);
+	ClassDB::bind_method(D_METHOD("set_ambient_occlusion_tint_enabled", "enabled"), &VoxelMaterial::set_ambient_occlusion_tint_enabled);
+	ClassDB::bind_method(D_METHOD("is_ambient_occlusion_tint_enabled"), &VoxelMaterial::is_ambient_occlusion_tint_enabled);
+	ClassDB::bind_method(D_METHOD("set_ambient_occlusion_tint_strength", "strength"), &VoxelMaterial::set_ambient_occlusion_tint_strength);
+	ClassDB::bind_method(D_METHOD("get_ambient_occlusion_tint_strength"), &VoxelMaterial::get_ambient_occlusion_tint_strength);
+	ClassDB::bind_method(D_METHOD("set_ambient_occlusion_tint_palette_texture", "texture"), &VoxelMaterial::set_ambient_occlusion_tint_palette_texture);
+	ClassDB::bind_method(D_METHOD("get_ambient_occlusion_tint_palette_texture"), &VoxelMaterial::get_ambient_occlusion_tint_palette_texture);
 	ClassDB::bind_method(D_METHOD("set_ambient_occlusion_mode", "mode"), &VoxelMaterial::set_ambient_occlusion_mode);
 	ClassDB::bind_method(D_METHOD("get_ambient_occlusion_mode"), &VoxelMaterial::get_ambient_occlusion_mode);
 	ClassDB::bind_method(D_METHOD("set_ambient_occlusion_face_mode", "mode"), &VoxelMaterial::set_ambient_occlusion_face_mode);
@@ -696,14 +1073,25 @@ void VoxelMaterial::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "emission_energy", PROPERTY_HINT_RANGE, "0,64,0.01,or_greater"), "set_emission_energy", "get_emission_energy");
 	ADD_GROUP("Ambient Occlusion", "ambient_occlusion_");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "ambient_occlusion_enabled"), "set_ambient_occlusion_enabled", "is_ambient_occlusion_enabled");
-	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "ambient_occlusion_color", PROPERTY_HINT_COLOR_NO_ALPHA), "set_ambient_occlusion_color", "get_ambient_occlusion_color");
-	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ambient_occlusion_strength", PROPERTY_HINT_RANGE, "0,4,0.01"), "set_ambient_occlusion_strength", "get_ambient_occlusion_strength");
-	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ambient_occlusion_hardness", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_ambient_occlusion_hardness", "get_ambient_occlusion_hardness");
+	// Keep the original names as storage-only aliases so existing .tres files and
+	// scripts continue to load while the Inspector presents accurate terminology.
+	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "ambient_occlusion_color", PROPERTY_HINT_COLOR_NO_ALPHA, "", PROPERTY_USAGE_STORAGE), "set_ambient_occlusion_color", "get_ambient_occlusion_color");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ambient_occlusion_strength", PROPERTY_HINT_RANGE, "0,1,0.01", PROPERTY_USAGE_STORAGE), "set_ambient_occlusion_strength", "get_ambient_occlusion_strength");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ambient_occlusion_hardness", PROPERTY_HINT_RANGE, "0,1,0.01", PROPERTY_USAGE_STORAGE), "set_ambient_occlusion_hardness", "get_ambient_occlusion_hardness");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ambient_occlusion_intensity", PROPERTY_HINT_RANGE, "0,1,0.01", PROPERTY_USAGE_EDITOR), "set_ambient_occlusion_intensity", "get_ambient_occlusion_intensity");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ambient_occlusion_contrast", PROPERTY_HINT_RANGE, "0,1,0.01", PROPERTY_USAGE_EDITOR), "set_ambient_occlusion_contrast", "get_ambient_occlusion_contrast");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "ambient_occlusion_mode", PROPERTY_HINT_ENUM, "Smooth,Voxelized,Hard Corners"), "set_ambient_occlusion_mode", "get_ambient_occlusion_mode");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "ambient_occlusion_face_mode", PROPERTY_HINT_ENUM, "All Faces,Floor Faces Only,Ceiling Faces Only"), "set_ambient_occlusion_face_mode", "get_ambient_occlusion_face_mode");
-	ADD_GROUP("Palette Textures", "");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ambient_occlusion_direct_light_influence", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_ambient_occlusion_direct_light_influence", "get_ambient_occlusion_direct_light_influence");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "ambient_occlusion_tint_enabled"), "set_ambient_occlusion_tint_enabled", "is_ambient_occlusion_tint_enabled");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ambient_occlusion_tint_strength", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_ambient_occlusion_tint_strength", "get_ambient_occlusion_tint_strength");
+	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "ambient_occlusion_tint_palette_texture", PROPERTY_HINT_RESOURCE_TYPE, "Texture2D"), "set_ambient_occlusion_tint_palette_texture", "get_ambient_occlusion_tint_palette_texture");
+	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "ambient_occlusion_fallback_tint", PROPERTY_HINT_COLOR_NO_ALPHA, "", PROPERTY_USAGE_EDITOR), "set_ambient_occlusion_color", "get_ambient_occlusion_color");
+	ADD_GROUP("Channel Textures", "");
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "palette_texture", PROPERTY_HINT_RESOURCE_TYPE, "Texture2D"), "set_palette_texture", "get_palette_texture");
-	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "material_texture", PROPERTY_HINT_RESOURCE_TYPE, "Texture2D"), "set_material_texture", "get_material_texture");
+	// Preserve old resources without presenting this ambiguous packed override
+	// in the authoring interface. New content uses the channel textures below.
+	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "material_texture", PROPERTY_HINT_RESOURCE_TYPE, "Texture2D", PROPERTY_USAGE_STORAGE), "set_material_texture", "get_material_texture");
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "metallic_texture", PROPERTY_HINT_RESOURCE_TYPE, "Texture2D"), "set_metallic_texture", "get_metallic_texture");
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "specularity_texture", PROPERTY_HINT_RESOURCE_TYPE, "Texture2D"), "set_specularity_texture", "get_specularity_texture");
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "emission_texture", PROPERTY_HINT_RESOURCE_TYPE, "Texture2D"), "set_emission_texture", "get_emission_texture");
@@ -732,10 +1120,15 @@ void VoxelMaterial::_rebuild_shader() {
 			bool(GLOBAL_GET("rendering/voxel_forward/indirect_light/enabled"));
 	const bool use_voxel_forward_reflection = shading_mode == SHADING_MODE_PBR &&
 			bool(GLOBAL_GET("rendering/voxel_forward/reflections/enabled"));
-	const bool use_architectural_hit_buffer = RenderingMethod::is_current_voxel_forward_method() &&
+	// The architectural hit buffer reconstructs opaque voxel surfaces in a
+	// separate color pass. Transparent materials can change occupancy through
+	// their lookup texture between those passes, so reusing the opaque hit
+	// payload can shade the wrong surface (animated effects appeared black).
+	const bool use_architectural_hit_buffer = !transparency_enabled &&
+			RenderingMethod::is_current_voxel_forward_method() &&
 			bool(GLOBAL_GET("rendering/voxel_forward/architectural_hit_buffer/enabled"));
 	const bool use_architectural_hit_position = use_architectural_hit_buffer &&
-			bool(GLOBAL_GET("rendering/voxel_forward/architectural_hit_buffer/exact_position_enabled"));
+			(bool(GLOBAL_GET("rendering/voxel_forward/architectural_hit_buffer/exact_position_enabled")) || use_voxel_forward_indirect);
 	const bool use_precomputed_inverse = use_architectural_hit_buffer && !use_architectural_hit_position &&
 			bool(GLOBAL_GET("rendering/voxel_forward/architectural_hit_buffer/precomputed_inverse_enabled"));
 	// Voxel Forward outlines are composited from the architectural hit buffer.
@@ -746,6 +1139,8 @@ void VoxelMaterial::_rebuild_shader() {
 	// the same face-center receiver as directional visibility, so illumination
 	// cannot form a smooth gradient across an individual voxel face.
 	const bool use_face_center_lighting = RenderingMethod::is_current_voxel_forward_method() || lighting_position_mode == LIGHTING_POSITION_VOXEL_FACE_CENTER;
+	const bool use_ao_tint = ambient_occlusion_enabled && ambient_occlusion_tint_enabled;
+	const bool use_ao_tint_palette = use_ao_tint && ambient_occlusion_tint_palette_texture.is_valid();
 	const int ao_mode_index = ambient_occlusion_enabled ? int(ambient_occlusion_mode) : 0;
 	uint32_t shader_key = uint32_t(shading_mode);
 	shader_key |= transparency_enabled ? VOXEL_SHADER_TRANSPARENCY : 0;
@@ -764,6 +1159,8 @@ void VoxelMaterial::_rebuild_shader() {
 	shader_key |= use_architectural_hit_position ? VOXEL_SHADER_ARCHITECTURAL_HIT_POSITION : 0;
 	shader_key |= use_precomputed_inverse ? VOXEL_SHADER_PRECOMPUTED_INVERSE : 0;
 	shader_key |= batched_resources_enabled ? VOXEL_SHADER_BATCHED_RESOURCES : 0;
+	shader_key |= use_ao_tint ? VOXEL_SHADER_AO_TINT : 0;
+	shader_key |= use_ao_tint_palette ? VOXEL_SHADER_AO_TINT_PALETTE : 0;
 	Ref<Shader> &voxel_shader = voxel_shader_cache[shader_key];
 	if (voxel_shader.is_null()) {
 		voxel_shader.instantiate();
@@ -834,9 +1231,10 @@ uniform float u_voxel_size = 0.1;
 		uint encoded_owner = uint(VOXEL_INSTANCE_ID) + 1u;
 		if (encoded_owner > 0x3FFFFu) discard;
 		VOXEL_HIT_PAYLOAD = (encoded_owner << 14u) | (world_face_code << 11u) | (local_face_code << 8u) | (hit_id & 0xFFu);
-		// Store exact object-local voxel coordinates. The color pass validates the
-		// owner payload before consuming this value, so overlapping volumes cannot
-		// read one another's hit position.
+		// Store one canonical world-space face center for every covered pixel. The
+		// DDGI screen resolve uses this identity to share one gather across matching
+		// lanes, including arbitrarily rotated rigid voxel bodies. W contains a
+		// 12+12-bit octahedral world normal plus one (zero remains the clear value).
 		// ARCH_HIT_POSITION_WRITE
 	} else {
 		vec3 local_normal = vec3(0.0);
@@ -860,12 +1258,21 @@ uniform float u_voxel_size = 0.1;
 		hit_voxel = ivec3(floor(hit_voxel_position - local_normal * (EPSILON * 4.0)));
 		if (any(lessThan(hit_voxel, ivec3(0))) || any(greaterThanEqual(hit_voxel, u_volume_dims))) discard;
 )SHADER");
-			body = body.replace("// ARCH_HIT_POSITION_WRITE", use_architectural_hit_position ? String("VOXEL_HIT_POSITION = vec4(hit_voxel_position, 1.0);") : String());
+			body = body.replace("// ARCH_HIT_POSITION_WRITE", use_architectural_hit_position ? String(R"SHADER(
+		vec3 canonical_local_face = (vec3(hit_voxel) + vec3(0.5) + local_normal * 0.5) * u_voxel_size;
+		vec3 canonical_world_face = (MODEL_MATRIX * vec4(canonical_local_face, 1.0)).xyz;
+		vec3 encoded_face_normal = world_geometric_normal / max(dot(abs(world_geometric_normal), vec3(1.0)), 0.00001);
+		vec2 normal_oct = encoded_face_normal.xz;
+		if (encoded_face_normal.y < 0.0) normal_oct = (1.0 - abs(normal_oct.yx)) * sign(normal_oct.xy);
+		uvec2 quantized_normal = uvec2(round(clamp(normal_oct * 0.5 + 0.5, vec2(0.0), vec2(1.0)) * 4095.0));
+		uint packed_world_normal = quantized_normal.x | (quantized_normal.y << 12u);
+		VOXEL_HIT_POSITION = vec4(canonical_world_face, float(packed_world_normal + 1u));
+)SHADER") : String());
 			body = body.replace("// ARCH_HIT_POSITION_READ", use_architectural_hit_position ? String(R"SHADER(
-		if (VOXEL_HIT_POSITION.w <= 0.0) discard;
-		hit_voxel_position = VOXEL_HIT_POSITION.xyz;
-		hit_local_position = hit_voxel_position * u_voxel_size;
-		hit_view_position = VIEW_MATRIX * MODEL_MATRIX * vec4(hit_local_position, 1.0);
+		if (VOXEL_HIT_POSITION.w < 1.0) discard;
+		hit_local_position = (VOXEL_INV_MODEL_MATRIX * vec4(VOXEL_HIT_POSITION.xyz, 1.0)).xyz;
+		hit_voxel_position = hit_local_position / u_voxel_size;
+		hit_view_position = VIEW_MATRIX * vec4(VOXEL_HIT_POSITION.xyz, 1.0);
 )SHADER") : String(R"SHADER(
 		vec2 hit_ndc_xy = SCREEN_UV * 2.0 - vec2(1.0);
 		vec4 reconstructed_view = INV_PROJECTION_MATRIX * vec4(hit_ndc_xy, VOXEL_HIT_DEPTH, 1.0);
@@ -895,54 +1302,78 @@ uniform float u_voxel_size = 0.1;
 		String ao_uniforms;
 		String ao_functions;
 		String ao_output = R"SHADER(
-	float voxel_ao = 1.0;
-	vec3 voxel_ao_tint = vec3(1.0);
-	AO = voxel_ao;
+	float voxel_ao_visibility = 1.0;
+	vec3 voxel_ao_indirect_factor = vec3(1.0);
+	AO = voxel_ao_visibility;
 	AO_LIGHT_AFFECT = 0.0;
 )SHADER";
 		if (ambient_occlusion_enabled) {
 			ao_uniforms = R"SHADER(
 uniform vec4 ambient_occlusion_color : source_color = vec4(0.0, 0.0, 0.0, 1.0);
 uniform int ambient_occlusion_face_mode = 0;
+uniform float ambient_occlusion_direct_light_influence : hint_range(0.0, 1.0) = 0.0;
 )SHADER";
+			if (use_ao_tint) {
+				ao_uniforms += "uniform float ambient_occlusion_tint_strength : hint_range(0.0, 1.0) = 1.0;\n";
+			}
+			if (use_ao_tint_palette) {
+				ao_uniforms += "uniform sampler2D u_ambient_occlusion_tint_palette : source_color, filter_nearest, repeat_disable;\n";
+			}
 			ao_functions = String(VOXEL_AO_BASIS_FUNCTION);
 			if (ambient_occlusion_mode == AMBIENT_OCCLUSION_MODE_VOXELIZED) {
 				ao_uniforms += "uniform vec4 ambient_occlusion_voxelized_curve = vec4(0.25, 0.5, 0.75, 1.0);\n";
 				ao_functions += VOXEL_AO_VOXELIZED_FUNCTION;
 			} else {
-				ao_uniforms += "uniform float ambient_occlusion_strength : hint_range(0.0, 4.0) = 1.0;\n";
+				ao_uniforms += "uniform float ambient_occlusion_strength : hint_range(0.0, 1.0) = 1.0;\n";
 				ao_uniforms += "uniform float ambient_occlusion_hardness : hint_range(0.0, 1.0) = 0.5;\n";
 				ao_functions += VOXEL_AO_CORNER_FUNCTION;
 				ao_functions += ambient_occlusion_mode == AMBIENT_OCCLUSION_MODE_HARD_CORNERS ? VOXEL_AO_HARD_CORNER_FUNCTION : VOXEL_AO_SMOOTH_FUNCTION;
 			}
 			ao_output = R"SHADER(
-	float voxel_ao = 1.0;
-	vec3 voxel_ao_tint = vec3(1.0);
+	float voxel_ao_visibility = 1.0;
+	vec3 voxel_ao_indirect_factor = vec3(1.0);
 	bool ambient_occlusion_receives_face =
 			ambient_occlusion_face_mode == 0 ||
 			(ambient_occlusion_face_mode == 1 && local_normal.y > 0.5) ||
 			(ambient_occlusion_face_mode == 2 && local_normal.y < -0.5);
 	if (ambient_occlusion_receives_face) {
 		float calculated_ao = voxel_face_ao(hit_voxel, hit_voxel_position, hit_axis, local_normal);
-		float raw_occlusion = clamp(1.0 - calculated_ao, 0.0, 1.0);
+		float raw_geometric_occlusion = clamp(1.0 - calculated_ao, 0.0, 1.0);
 )SHADER";
 			if (ambient_occlusion_mode == AMBIENT_OCCLUSION_MODE_VOXELIZED) {
 				ao_output += R"SHADER(
-		int curve_index = clamp(int(round(raw_occlusion * 4.0)) - 1, 0, 3);
-		float occlusion_amount = raw_occlusion > 0.0 ? ambient_occlusion_voxelized_curve[curve_index] : 0.0;
+		int curve_index = clamp(int(round(raw_geometric_occlusion * 4.0)) - 1, 0, 3);
+		float contrast_shaped_occlusion = raw_geometric_occlusion > 0.0 ? ambient_occlusion_voxelized_curve[curve_index] : 0.0;
 )SHADER";
 			} else {
 				ao_output += R"SHADER(
-		float hardness_exponent = exp2((clamp(ambient_occlusion_hardness, 0.0, 1.0) - 0.5) * 4.0);
-		float occlusion_amount = min(pow(raw_occlusion, hardness_exponent) * clamp(ambient_occlusion_strength, 0.0, 4.0), 1.0);
+		float contrast_exponent = exp2((clamp(ambient_occlusion_hardness, 0.0, 1.0) - 0.5) * 4.0);
+		float contrast_shaped_occlusion = pow(raw_geometric_occlusion, contrast_exponent) * clamp(ambient_occlusion_strength, 0.0, 1.0);
 )SHADER";
 			}
 			ao_output += R"SHADER(
-		voxel_ao = 1.0 - occlusion_amount;
-		voxel_ao_tint = mix(vec3(1.0), ambient_occlusion_color.rgb, occlusion_amount);
+		float final_occlusion_amount = clamp(contrast_shaped_occlusion, 0.0, 1.0);
+		voxel_ao_visibility = 1.0 - final_occlusion_amount;
+		voxel_ao_indirect_factor = vec3(voxel_ao_visibility);
+)SHADER";
+			if (use_ao_tint) {
+				ao_output += "\t\tvec3 material_ao_tint = ambient_occlusion_color.rgb;\n";
+				if (use_ao_tint_palette) {
+					ao_output += "\t\tmaterial_ao_tint = textureLod(u_ambient_occlusion_tint_palette, palette_uv, 0.0).rgb;\n";
+				}
+				ao_output += R"SHADER(
+		// Treat the palette as chroma, not a second darkness control. Intensity
+		// remains solely responsible for maximum occlusion.
+		float tint_peak = max(material_ao_tint.r, max(material_ao_tint.g, material_ao_tint.b));
+		vec3 normalized_ao_tint = tint_peak > 0.0001 ? material_ao_tint / tint_peak : vec3(1.0);
+		float applied_tint_strength = ambient_occlusion_tint_strength * final_occlusion_amount;
+		voxel_ao_indirect_factor *= mix(vec3(1.0), normalized_ao_tint, applied_tint_strength);
+)SHADER";
+			}
+			ao_output += R"SHADER(
 	}
-	AO = voxel_ao;
-	AO_LIGHT_AFFECT = 0.0;
+	AO = voxel_ao_visibility;
+	AO_LIGHT_AFFECT = ambient_occlusion_direct_light_influence;
 )SHADER";
 		}
 		body = body.replace("// AO_UNIFORMS", ao_uniforms);
@@ -993,6 +1424,62 @@ global uniform int voxel_forward_indirect_resolution;
 global uniform float voxel_forward_indirect_transition_cells;
 global uniform float voxel_forward_indirect_intensity;
 global uniform bool voxel_forward_indirect_ready;
+global uniform int voxel_forward_indirect_backend;
+global uniform int voxel_forward_indirect_debug_mode;
+global uniform sampler2D voxel_forward_restir_gi : filter_linear, repeat_disable;
+global uniform bool voxel_forward_restir_ready;
+global uniform float voxel_forward_corner_ao_strength;
+global uniform vec4 voxel_forward_corner_ao_tint : source_color;
+global uniform vec3 voxel_forward_indirect_dirty_min0;
+global uniform vec3 voxel_forward_indirect_dirty_min1;
+global uniform vec3 voxel_forward_indirect_dirty_min2;
+global uniform vec3 voxel_forward_indirect_dirty_max0;
+global uniform vec3 voxel_forward_indirect_dirty_max1;
+global uniform vec3 voxel_forward_indirect_dirty_max2;
+global uniform int voxel_forward_indirect_staging_mask;
+global uniform sampler2D voxel_forward_ddgi_irradiance_lod0 : filter_linear, repeat_disable;
+global uniform sampler2D voxel_forward_ddgi_irradiance_lod1 : filter_linear, repeat_disable;
+global uniform sampler2D voxel_forward_ddgi_irradiance_lod2 : filter_linear, repeat_disable;
+global uniform sampler2D voxel_forward_ddgi_irradiance_lod3 : filter_linear, repeat_disable;
+global uniform sampler2D voxel_forward_ddgi_depth_lod0 : filter_linear, repeat_disable;
+global uniform sampler2D voxel_forward_ddgi_depth_lod1 : filter_linear, repeat_disable;
+global uniform sampler2D voxel_forward_ddgi_depth_lod2 : filter_linear, repeat_disable;
+global uniform sampler2D voxel_forward_ddgi_depth_lod3 : filter_linear, repeat_disable;
+global uniform sampler2D voxel_forward_ddgi_metadata_lod0 : filter_nearest, repeat_disable;
+global uniform sampler2D voxel_forward_ddgi_metadata_lod1 : filter_nearest, repeat_disable;
+global uniform sampler2D voxel_forward_ddgi_metadata_lod2 : filter_nearest, repeat_disable;
+global uniform sampler2D voxel_forward_ddgi_metadata_lod3 : filter_nearest, repeat_disable;
+global uniform vec3 voxel_forward_ddgi_origin_lod0;
+global uniform vec3 voxel_forward_ddgi_origin_lod1;
+global uniform vec3 voxel_forward_ddgi_origin_lod2;
+global uniform vec3 voxel_forward_ddgi_origin_lod3;
+global uniform vec3 voxel_forward_ddgi_cell_size_lod0;
+global uniform vec3 voxel_forward_ddgi_cell_size_lod1;
+global uniform vec3 voxel_forward_ddgi_cell_size_lod2;
+global uniform vec3 voxel_forward_ddgi_cell_size_lod3;
+global uniform ivec3 voxel_forward_ddgi_phase_lod0;
+global uniform ivec3 voxel_forward_ddgi_phase_lod1;
+global uniform ivec3 voxel_forward_ddgi_phase_lod2;
+global uniform ivec3 voxel_forward_ddgi_phase_lod3;
+global uniform ivec3 voxel_forward_ddgi_logical_origin_lod0;
+global uniform ivec3 voxel_forward_ddgi_logical_origin_lod1;
+global uniform ivec3 voxel_forward_ddgi_logical_origin_lod2;
+global uniform ivec3 voxel_forward_ddgi_logical_origin_lod3;
+global uniform int voxel_forward_ddgi_probe_resolution;
+global uniform vec2 voxel_forward_ddgi_irradiance_atlas_size;
+global uniform vec2 voxel_forward_ddgi_visibility_atlas_size;
+global uniform float voxel_forward_ddgi_self_shadow_bias;
+global uniform float voxel_forward_ddgi_view_bias;
+global uniform float voxel_forward_ddgi_lod_transition;
+global uniform vec3 voxel_forward_ddgi_camera_position;
+global uniform bool voxel_forward_ddgi_ready;
+global uniform sampler2D voxel_forward_ddgi_resolve : filter_nearest, repeat_disable;
+global uniform bool voxel_forward_ddgi_resolve_ready;
+global uniform int voxel_forward_ddgi_debug_mode;
+global uniform float voxel_forward_ddgi_shadow_fill_strength;
+global uniform vec4 voxel_forward_ddgi_shadow_fill_tint : source_color;
+global uniform float voxel_forward_ddgi_shadow_fill_reach;
+global uniform float voxel_forward_ddgi_color_saturation;
 )SHADER") : String());
 		body = body.replace("// VOXEL_FORWARD_INDIRECT_FUNCTIONS", use_voxel_forward_indirect ? String(VOXEL_FORWARD_INDIRECT_FUNCTIONS) : String());
 		body = body.replace("// VOXEL_FORWARD_REFLECTION_UNIFORMS", use_voxel_forward_reflection ? String(R"SHADER(
@@ -1001,6 +1488,10 @@ global uniform bool voxel_forward_reflection_ready;
 global uniform float voxel_forward_reflection_intensity;
 )SHADER") : String());
 		body = body.replace("// TRANSPARENCY_UNIFORM", transparency_enabled ? "uniform sampler2D u_transparency : filter_nearest, repeat_disable;" : "");
+		body = body.replace("// TRANSPARENCY_OCCUPANCY_CHECK", transparency_enabled ? R"SHADER(
+	vec2 transparency_uv = vec2((float(voxel_id) + 0.5) / 256.0, 0.5);
+	if (textureLod(u_transparency, transparency_uv, 0.0).r <= 0.001) return false;
+)SHADER" : "");
 		body = body.replace("// TRANSPARENCY_OUTPUT", transparency_enabled ? "ALPHA = textureLod(u_transparency, palette_uv, 0.0).r;" : "");
 		body = body.replace("// LIGHTING_VERTEX_OUTPUT", use_face_center_lighting ? String(R"SHADER(
 	// Optional stylized mode: evaluate direct and reflective lighting once from
@@ -1019,18 +1510,199 @@ global uniform float voxel_forward_reflection_intensity;
 			voxel_forward_enable += "\n\tVOXEL_OCCUPANCY_SHADOWS = true;";
 		}
 		body = body.replace("// VOXEL_OCCUPANCY_ENABLE", voxel_forward_enable);
-		body = body.replace("// INDIRECT_LIGHT_OUTPUT", shading_mode == SHADING_MODE_PBR ? String(R"SHADER(
-	// Ambient belongs to Voxel Forward, not Forward+'s sky/IBL path. It is
-	// deliberately constant for every fragment of the voxel material color.
-	EMISSION += palette_color * voxel_forward_ambient_color.rgb * voxel_forward_ambient_energy * voxel_ao_tint;
-)SHADER") + (use_voxel_forward_indirect ? String(R"SHADER(
+		body = body.replace("// INDIRECT_LIGHT_OUTPUT", shading_mode == SHADING_MODE_PBR ? (use_voxel_forward_indirect ? String(R"SHADER(
 	vec3 indirect_local_position = (vec3(hit_voxel) + vec3(0.5) + local_normal * 0.5) * u_voxel_size;
 	vec3 indirect_world_normal = normalize(mat3(MODEL_MATRIX) * local_normal);
-	vec3 indirect_world_position = (MODEL_MATRIX * vec4(indirect_local_position, 1.0)).xyz + indirect_world_normal * voxel_forward_indirect_near_cell_size * 0.55;
-	vec3 indirect_light = sample_voxel_forward_indirect(indirect_world_position);
-	EMISSION += palette_color * indirect_light * (voxel_forward_indirect_intensity / PI) * voxel_ao_tint;
-)SHADER") : String()) : String());
-		body = body.replace("// REFLECTION_OUTPUT", use_voxel_forward_reflection ? String(R"SHADER(
+	vec3 indirect_world_position = (MODEL_MATRIX * vec4(indirect_local_position, 1.0)).xyz;
+	// The lookup begins on the voxel face already. Only move it far enough to
+	// resolve floating-point boundary ambiguity. Biasing by a fraction of the GI
+	// cell size can move a sample metres away, through the opposite wall of a
+	// corridor, and makes the selected irradiance jump as visible faces change.
+	float indirect_surface_bias = max(length((MODEL_MATRIX * vec4(local_normal * u_voxel_size, 0.0)).xyz) * 0.02, 0.0001);
+	vec3 indirect_sample_position = indirect_world_position + indirect_world_normal * indirect_surface_bias;
+	float ddgi_visibility = 0.0;
+	float ddgi_data_support = 0.0;
+	float ddgi_selected_lod = -1.0;
+	float ddgi_in_front = 0.0;
+	float voxel_gi_coverage = 0.0;
+	float voxel_gi_selected_cascade = -1.0;
+	float voxel_gi_gather_visibility = 0.0;
+	vec3 indirect_light = vec3(0.0);
+	vec4 restir_sample = vec4(0.0);
+	if (voxel_forward_indirect_backend == 2 && voxel_forward_ddgi_ready && voxel_forward_ddgi_resolve_ready && voxel_forward_ddgi_debug_mode != 15) {
+		vec4 ddgi_resolved = textureLod(voxel_forward_ddgi_resolve, SCREEN_UV, 0.0);
+		indirect_light = max(ddgi_resolved.rgb, vec3(0.0));
+		ddgi_data_support = clamp(ddgi_resolved.a, 0.0, 1.0);
+	} else if (voxel_forward_indirect_backend == 1 && voxel_forward_restir_ready) {
+		// Resolve one canonical GI value for the complete voxel face. Sampling at
+		// SCREEN_UV exposes the half-resolution stochastic reservoir pixels as
+		// tiny squares within a voxel and lets them flicker independently.
+		vec4 restir_clip = PROJECTION_MATRIX * VIEW_MATRIX * vec4(indirect_world_position, 1.0);
+		// Keep the projection jitter: the ReSTIR buffer is generated from the same
+		// jittered depth buffer, so removing it misaligns GI and geometry in motion.
+		// Stable voxel-face random keys keep the aligned sample temporally coherent.
+		vec2 restir_face_ndc = restir_clip.xy / max(restir_clip.w, 0.000001);
+		vec2 restir_face_uv = restir_face_ndc * 0.5 + 0.5;
+		vec2 restir_half_texel = 0.5 / vec2(textureSize(voxel_forward_restir_gi, 0));
+		vec2 restir_edge_uv = clamp(restir_face_uv, restir_half_texel, vec2(1.0) - restir_half_texel);
+		bool restir_face_center_in_front = restir_clip.w > 0.000001;
+		vec4 fragment_restir_sample = textureLod(voxel_forward_restir_gi, SCREEN_UV, 0.0);
+		// A partially visible face may have its center just outside the viewport.
+		// Clamp to the nearest real texel so top/side-edge voxels do not switch
+		// between canonical and independent fragment samples as the camera jitters.
+		vec4 face_restir_sample = restir_face_center_in_front ? textureLod(voxel_forward_restir_gi, restir_edge_uv, 0.0) : vec4(0.0);
+		// A projected face center can be hidden even while part of the face is
+		// visible. In that case retain valid local GI instead of exposing an
+		// invalid canonical reservoir as an ambient flash.
+		restir_sample = face_restir_sample.a > 0.0 ? face_restir_sample : fragment_restir_sample;
+		indirect_light = max(restir_sample.rgb, vec3(0.0));
+		voxel_gi_coverage = clamp(restir_sample.a, 0.0, 1.0);
+	}
+	// A tint colors only the occluded portion. Fully open face corners remain
+	// neutral, while black preserves the material's exact topology AO unchanged.
+	vec3 globally_tinted_corner = voxel_ao_indirect_factor + (vec3(1.0) - voxel_ao_indirect_factor) * voxel_forward_corner_ao_tint.rgb;
+	vec3 directional_corner_factor = mix(vec3(1.0), globally_tinted_corner, voxel_forward_corner_ao_strength);
+	vec3 ambient_fallback = palette_color * voxel_forward_ambient_color.rgb * voxel_forward_ambient_energy * directional_corner_factor;
+	// Missing DDGI data is unknown, not ambient-visible. Starting with uniform
+	// ambient made enclosed surfaces light up first and darken only as depth-aware
+	// probes matured. Keep the unknown contribution black so valid radiance fades
+	// in through atlas confidence; edits retain their previous valid probe history.
+	float ambient_fallback_weight = 0.0;
+	vec3 fallback_contribution = vec3(0.0);
+	if (voxel_forward_indirect_backend == 2 && (voxel_forward_ddgi_debug_mode == 0 || voxel_forward_ddgi_debug_mode == 11) && voxel_forward_ddgi_shadow_fill_strength > 0.0) {
+		// This is receiver-shadow fill, not a global DDGI gain. Weight it by the
+		// same directional occupancy mask used by direct voxel lighting so lit
+		// surfaces retain their sampled result and soft shadow edges blend smoothly.
+		float receiver_shadow_visibility = voxel_forward_shadow_ready ? textureLod(voxel_forward_shadow_mask, SCREEN_UV, 0.0).r : 1.0;
+		float receiver_light_facing = voxel_forward_shadow_ready ? max(dot(indirect_world_normal, voxel_forward_shadow_light_direction), 0.0) : 1.0;
+		// A face can receive no directional light because it is occluded or because
+		// it faces away from the light. Both are direct-light deficits that indirect
+		// illumination and the scene's artistic shadow fill are expected to soften.
+		float receiver_shadow_weight = 1.0 - clamp(receiver_shadow_visibility * receiver_light_facing, 0.0, 1.0);
+		// The scene controls how far the artistic fill may depart from sampled DDGI.
+		// Reach 0 amplifies valid sampled radiance inside shadows; reach 1 supplies
+		// an ambient-colored floor even while probe support is missing.
+		vec3 shadow_lift_tint = max(voxel_forward_ddgi_shadow_fill_tint.rgb, vec3(0.0));
+		vec3 sampled_lift = indirect_light * shadow_lift_tint * voxel_forward_ddgi_shadow_fill_strength;
+		// indirect_light is irradiance and is divided by PI below. Convert the
+		// designer's desired diffuse output floor into irradiance here so strength
+		// 1.0 reaches the selected ambient color instead of only 1/PI of it.
+		vec3 shadow_floor = max(voxel_forward_ambient_color.rgb * voxel_forward_ambient_energy * shadow_lift_tint * voxel_forward_ddgi_shadow_fill_strength * PI, vec3(0.0));
+		float floor_luminance = dot(shadow_floor, vec3(0.2126, 0.7152, 0.0722));
+		float indirect_luminance = dot(indirect_light, vec3(0.2126, 0.7152, 0.0722));
+		float missing_floor = floor_luminance > 0.00001 ? clamp(1.0 - indirect_luminance / floor_luminance, 0.0, 1.0) : 0.0;
+		vec3 artistic_floor = shadow_floor * missing_floor;
+		indirect_light += receiver_shadow_weight * mix(sampled_lift, artistic_floor, voxel_forward_ddgi_shadow_fill_reach);
+	}
+	if (voxel_forward_indirect_backend == 2 && (voxel_forward_ddgi_debug_mode == 0 || voxel_forward_ddgi_debug_mode == 11)) {
+		float indirect_luminance = dot(indirect_light, vec3(0.2126, 0.7152, 0.0722));
+		indirect_light = max(mix(vec3(indirect_luminance), indirect_light, voxel_forward_ddgi_color_saturation), vec3(0.0));
+	}
+	vec3 indirect_output_light = indirect_light * (voxel_forward_indirect_intensity / PI);
+	if (voxel_forward_toon_enabled && voxel_forward_indirect_backend == 2 && (voxel_forward_ddgi_debug_mode == 0 || voxel_forward_ddgi_debug_mode == 11) && voxel_forward_ddgi_toon_band_count >= 2) {
+		// Quantize only the final indirect contribution. Probe history remains
+		// continuous, so toon styling cannot feed back into multibounce convergence.
+		float output_luminance = dot(indirect_output_light, vec3(0.2126, 0.7152, 0.0722));
+		float band_range = max(voxel_forward_ddgi_toon_band_range, 0.01);
+		float band_steps = float(voxel_forward_ddgi_toon_band_count - 1);
+		float band_coordinate = clamp(output_luminance / band_range, 0.0, 1.0) * band_steps;
+		float lower_band = floor(band_coordinate);
+		float transition_width = max(fwidth(band_coordinate), max(voxel_forward_ddgi_toon_band_softness * 0.5, 0.0001));
+		float upper_band_weight = smoothstep(0.5 - transition_width, 0.5 + transition_width, fract(band_coordinate));
+		float band_luminance = ((lower_band + upper_band_weight) / band_steps) * band_range;
+		// Preserve HDR energy above the selected range instead of turning this
+		// style control into an accidental radiance clamp.
+		band_luminance += max(output_luminance - band_range, 0.0);
+		indirect_output_light *= band_luminance / max(output_luminance, 0.00001);
+	}
+	// Confidence owns the crossfade: DDGI and fallback sum to one source rather
+	// than adding full irradiance while partially retaining constant ambient.
+	// The gather has already normalized irradiance using the matching visible
+	// weights. Multiplying by the raw weight sum here exposed the probe lattice.
+	vec3 indirect_contribution = palette_color * indirect_output_light * directional_corner_factor;
+	if (voxel_forward_indirect_backend == 1 && voxel_forward_indirect_debug_mode >= 1 && voxel_forward_indirect_debug_mode <= 5) {
+		ALBEDO = vec3(0.0);
+		EMISSION = indirect_light;
+	} else if (voxel_forward_indirect_backend == 1 && voxel_forward_indirect_debug_mode == 1) {
+		ALBEDO = vec3(0.0);
+		vec3 cascade_colors[3] = vec3[3](vec3(0.05, 0.9, 1.0), vec3(0.1, 1.0, 0.25), vec3(1.0, 0.5, 0.05));
+		int cascade_index = int(clamp(round(voxel_gi_selected_cascade), 0.0, 2.0));
+		EMISSION = cascade_colors[cascade_index] * voxel_gi_coverage;
+	} else if (voxel_forward_indirect_backend == 1 && (voxel_forward_indirect_debug_mode == 2 || voxel_forward_indirect_debug_mode == 13)) {
+		ALBEDO = vec3(0.0);
+		bool dirty =
+			all(greaterThanEqual(indirect_world_position, voxel_forward_indirect_dirty_min0)) && all(lessThan(indirect_world_position, voxel_forward_indirect_dirty_max0)) ||
+			all(greaterThanEqual(indirect_world_position, voxel_forward_indirect_dirty_min1)) && all(lessThan(indirect_world_position, voxel_forward_indirect_dirty_max1)) ||
+			all(greaterThanEqual(indirect_world_position, voxel_forward_indirect_dirty_min2)) && all(lessThan(indirect_world_position, voxel_forward_indirect_dirty_max2));
+		EMISSION = dirty ? vec3(1.0, 0.22, 0.02) : (voxel_forward_indirect_debug_mode == 13 ? vec3(0.02, 0.35, 0.08) : vec3(0.0));
+	} else if (voxel_forward_indirect_backend == 1 && (voxel_forward_indirect_debug_mode == 3 || voxel_forward_indirect_debug_mode == 4)) {
+		ALBEDO = vec3(0.0);
+		float transmittance_sum = 0.0;
+		for (int lobe = 0; lobe < 6; lobe++) transmittance_sum += voxel_gi_debug_value(indirect_world_position, voxel_gi_selected_cascade, lobe).a;
+		float mean_transmittance = transmittance_sum / 6.0;
+		EMISSION = voxel_forward_indirect_debug_mode == 3 ? mix(vec3(0.9, 0.03, 0.01), vec3(0.02, 0.3, 0.05), step(0.001, transmittance_sum)) : vec3(mean_transmittance);
+	} else if (voxel_forward_indirect_backend == 1 && voxel_forward_indirect_debug_mode >= 5 && voxel_forward_indirect_debug_mode <= 10) {
+		ALBEDO = vec3(0.0);
+		vec3 debug_normals[6] = vec3[6](vec3(1.0, 0.0, 0.0), vec3(-1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, -1.0, 0.0), vec3(0.0, 0.0, 1.0), vec3(0.0, 0.0, -1.0));
+		float debug_coverage;
+		float debug_cascade;
+		float debug_gather_visibility;
+		vec3 debug_normal = debug_normals[voxel_forward_indirect_debug_mode - 5];
+		// Match the production voxel-scale surface bias. A GI-cell-scale bias can
+		// cross an entire narrow corridor and visualize an unrelated cell.
+		EMISSION = sample_voxel_forward_indirect(indirect_world_position + debug_normal * indirect_surface_bias, debug_normal, debug_coverage, debug_cascade, debug_gather_visibility) * voxel_forward_indirect_intensity;
+	} else if (voxel_forward_indirect_backend == 1 && voxel_forward_indirect_debug_mode == 11) {
+		ALBEDO = vec3(0.0);
+		EMISSION = indirect_light * voxel_forward_indirect_intensity;
+	} else if (voxel_forward_indirect_backend == 1 && voxel_forward_indirect_debug_mode == 12) {
+		ALBEDO = vec3(0.0);
+		EMISSION = voxel_ao_indirect_factor;
+	} else if (voxel_forward_indirect_backend == 1 && voxel_forward_indirect_debug_mode == 14) {
+		ALBEDO = vec3(0.0);
+		EMISSION = mix(vec3(0.95, 0.03, 0.02), vec3(0.02, 0.85, 0.15), voxel_gi_gather_visibility);
+	} else if (voxel_forward_indirect_backend == 1 && voxel_forward_indirect_debug_mode == 15) {
+		// Show exactly what the normal material path adds after albedo, 1/PI,
+		// corner occlusion, and missing-data fallback. Unlike raw mode 11 this
+		// does not make ordinary HDR irradiance look like saturated white light.
+		ALBEDO = vec3(0.0);
+		EMISSION = fallback_contribution + indirect_contribution;
+	} else if (voxel_forward_indirect_backend == 1 && voxel_forward_indirect_debug_mode == 16) {
+		ALBEDO = vec3(0.0);
+		EMISSION = vec3(ambient_fallback_weight);
+	} else if (voxel_forward_indirect_backend == 2 && voxel_forward_ddgi_debug_mode == 11) {
+		ALBEDO = vec3(0.0);
+		EMISSION = indirect_contribution;
+	} else if (voxel_forward_indirect_backend == 2 && voxel_forward_ddgi_debug_mode == 12) {
+		ALBEDO = vec3(0.0);
+		EMISSION = fallback_contribution;
+	} else if (voxel_forward_indirect_backend == 2 && voxel_forward_ddgi_debug_mode == 13) {
+		ALBEDO = vec3(0.0);
+		EMISSION = indirect_light;
+	} else if (voxel_forward_indirect_backend == 2 && voxel_forward_ddgi_debug_mode == 14) {
+		ALBEDO = vec3(0.0);
+		EMISSION = indirect_light;
+	} else if (voxel_forward_indirect_backend == 2 && voxel_forward_ddgi_debug_mode == 15) {
+		// Direct-light-only diagnostic. Medium disables reflections, so no other
+		// material-space emission remains in the reference test configuration.
+		EMISSION = vec3(0.0);
+	} else if (voxel_forward_indirect_backend == 2 && voxel_forward_ddgi_debug_mode == 16) {
+		ALBEDO = vec3(0.0);
+		EMISSION = indirect_light;
+	} else if (voxel_forward_indirect_backend == 2 && voxel_forward_ddgi_debug_mode == 17) {
+		ALBEDO = vec3(0.0);
+		EMISSION = indirect_light;
+	} else if (voxel_forward_indirect_backend == 2 && voxel_forward_ddgi_debug_mode == 18) {
+		ALBEDO = vec3(0.0);
+		EMISSION = indirect_light;
+	} else {
+		EMISSION += fallback_contribution + indirect_contribution;
+	}
+)SHADER") : String(R"SHADER(
+	// Legacy/no-DDGI fallback. DDGI materials instead blend this term per pixel
+	// using initialized probe coverage so it cannot illuminate through walls.
+	EMISSION += palette_color * voxel_forward_ambient_color.rgb * voxel_forward_ambient_energy * voxel_ao_indirect_factor;
+)SHADER")) : String());
+	body = body.replace("// REFLECTION_OUTPUT", use_voxel_forward_reflection ? String(R"SHADER(
 	if (voxel_forward_reflection_ready) {
 		// The resolve pass traces one ray from the shared-world face center, so this
 		// radiance is constant across the complete voxel face, including where two
@@ -1054,6 +1726,13 @@ global uniform float voxel_forward_reflection_intensity;
 	if (ambient_occlusion_enabled) {
 		set_shader_parameter("ambient_occlusion_color", ambient_occlusion_color);
 		set_shader_parameter("ambient_occlusion_face_mode", int(ambient_occlusion_face_mode));
+		set_shader_parameter("ambient_occlusion_direct_light_influence", ambient_occlusion_direct_light_influence);
+		if (use_ao_tint) {
+			set_shader_parameter("ambient_occlusion_tint_strength", ambient_occlusion_tint_strength);
+		}
+		if (use_ao_tint_palette) {
+			set_shader_parameter("u_ambient_occlusion_tint_palette", ambient_occlusion_tint_palette_texture);
+		}
 		if (ambient_occlusion_mode == AMBIENT_OCCLUSION_MODE_VOXELIZED) {
 			set_shader_parameter("ambient_occlusion_voxelized_curve", _make_voxelized_ao_curve(ambient_occlusion_hardness, ambient_occlusion_strength));
 		} else {
@@ -1134,7 +1813,7 @@ void VoxelMaterial::set_ambient_occlusion_color(const Color &p_color) {
 Color VoxelMaterial::get_ambient_occlusion_color() const { return ambient_occlusion_color; }
 
 void VoxelMaterial::set_ambient_occlusion_strength(real_t p_strength) {
-	p_strength = CLAMP(p_strength, real_t(0.0), real_t(4.0));
+	p_strength = CLAMP(p_strength, real_t(0.0), real_t(1.0));
 	if (Math::is_equal_approx(ambient_occlusion_strength, p_strength)) {
 		return;
 	}
@@ -1150,6 +1829,10 @@ void VoxelMaterial::set_ambient_occlusion_strength(real_t p_strength) {
 }
 
 real_t VoxelMaterial::get_ambient_occlusion_strength() const { return ambient_occlusion_strength; }
+
+void VoxelMaterial::set_ambient_occlusion_intensity(real_t p_intensity) { set_ambient_occlusion_strength(p_intensity); }
+
+real_t VoxelMaterial::get_ambient_occlusion_intensity() const { return get_ambient_occlusion_strength(); }
 
 void VoxelMaterial::set_ambient_occlusion_hardness(real_t p_hardness) {
 	p_hardness = CLAMP(p_hardness, real_t(0.0), real_t(1.0));
@@ -1168,6 +1851,69 @@ void VoxelMaterial::set_ambient_occlusion_hardness(real_t p_hardness) {
 }
 
 real_t VoxelMaterial::get_ambient_occlusion_hardness() const { return ambient_occlusion_hardness; }
+
+void VoxelMaterial::set_ambient_occlusion_contrast(real_t p_contrast) { set_ambient_occlusion_hardness(p_contrast); }
+
+real_t VoxelMaterial::get_ambient_occlusion_contrast() const { return get_ambient_occlusion_hardness(); }
+
+void VoxelMaterial::set_ambient_occlusion_direct_light_influence(real_t p_influence) {
+	p_influence = CLAMP(p_influence, real_t(0.0), real_t(1.0));
+	if (Math::is_equal_approx(ambient_occlusion_direct_light_influence, p_influence)) {
+		return;
+	}
+	ambient_occlusion_direct_light_influence = p_influence;
+	if (get_shader().is_valid() && ambient_occlusion_enabled) {
+		set_shader_parameter("ambient_occlusion_direct_light_influence", ambient_occlusion_direct_light_influence);
+	}
+	_emit_ambient_occlusion_changed();
+}
+
+real_t VoxelMaterial::get_ambient_occlusion_direct_light_influence() const { return ambient_occlusion_direct_light_influence; }
+
+void VoxelMaterial::set_ambient_occlusion_tint_enabled(bool p_enabled) {
+	if (ambient_occlusion_tint_enabled == p_enabled) {
+		return;
+	}
+	ambient_occlusion_tint_enabled = p_enabled;
+	if (get_shader().is_valid() && ambient_occlusion_enabled) {
+		_rebuild_shader();
+	}
+	_emit_ambient_occlusion_changed();
+}
+
+bool VoxelMaterial::is_ambient_occlusion_tint_enabled() const { return ambient_occlusion_tint_enabled; }
+
+void VoxelMaterial::set_ambient_occlusion_tint_strength(real_t p_strength) {
+	p_strength = CLAMP(p_strength, real_t(0.0), real_t(1.0));
+	if (Math::is_equal_approx(ambient_occlusion_tint_strength, p_strength)) {
+		return;
+	}
+	ambient_occlusion_tint_strength = p_strength;
+	if (get_shader().is_valid() && ambient_occlusion_enabled && ambient_occlusion_tint_enabled) {
+		set_shader_parameter("ambient_occlusion_tint_strength", ambient_occlusion_tint_strength);
+	}
+	_emit_ambient_occlusion_changed();
+}
+
+real_t VoxelMaterial::get_ambient_occlusion_tint_strength() const { return ambient_occlusion_tint_strength; }
+
+void VoxelMaterial::set_ambient_occlusion_tint_palette_texture(const Ref<Texture2D> &p_texture) {
+	if (ambient_occlusion_tint_palette_texture == p_texture) {
+		return;
+	}
+	const bool variant_changed = ambient_occlusion_tint_palette_texture.is_valid() != p_texture.is_valid();
+	ambient_occlusion_tint_palette_texture = p_texture;
+	if (get_shader().is_valid() && ambient_occlusion_enabled && ambient_occlusion_tint_enabled) {
+		if (variant_changed) {
+			_rebuild_shader();
+		} else if (ambient_occlusion_tint_palette_texture.is_valid()) {
+			set_shader_parameter("u_ambient_occlusion_tint_palette", ambient_occlusion_tint_palette_texture);
+		}
+	}
+	_emit_ambient_occlusion_changed();
+}
+
+Ref<Texture2D> VoxelMaterial::get_ambient_occlusion_tint_palette_texture() const { return ambient_occlusion_tint_palette_texture; }
 
 void VoxelMaterial::set_ambient_occlusion_mode(AmbientOcclusionMode p_mode) {
 	ERR_FAIL_INDEX(p_mode, 3);
@@ -1344,7 +2090,11 @@ void VoxelMaterial::set_batched_resources_enabled(bool p_enabled) {
 		return;
 	}
 	batched_resources_enabled = p_enabled;
-	_rebuild_shader();
+	// Like the other feature setters, configure new materials before compiling.
+	// ensure_shader() builds the final combination after texture features are set.
+	if (get_shader().is_valid()) {
+		_rebuild_shader();
+	}
 }
 
 bool VoxelMaterial::is_batched_resources_enabled() const {

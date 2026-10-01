@@ -1,0 +1,35 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=5
+
+[application]
+
+config/name="Voxel Lighting Bake Validation"
+run/main_scene="res://main.tscn"
+config/features=PackedStringArray("4.7")
+
+[display]
+
+window/size/viewport_width=640
+window/size/viewport_height=480
+
+[physics]
+
+3d/physics_engine="VoxelPhysics3D"
+
+[rendering]
+
+renderer/rendering_method="voxel_forward"
+voxel_forward/shadow_mask/enabled=true
+voxel_forward/indirect_light/ddgi/spatial_cascade_resolution=8
+voxel_forward/indirect_light/ddgi/lod0_spacing_voxels=4
+voxel_forward/indirect_light/ddgi/lod1_spacing_voxels=8
+voxel_forward/indirect_light/ddgi/lod2_spacing_voxels=16
+voxel_forward/indirect_light/ddgi/lod3_spacing_voxels=32
+voxel_forward/reflections/enabled=false

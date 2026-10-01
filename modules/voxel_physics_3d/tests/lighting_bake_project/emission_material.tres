@@ -1,0 +1,13 @@
+[gd_resource type="VoxelMaterial" format=3 uid="uid://c2032x1sxxnf8"]
+
+[sub_resource type="Gradient" id="Gradient_emission"]
+colors = PackedColorArray(1, 1, 1, 1, 1, 1, 1, 1)
+
+[sub_resource type="GradientTexture1D" id="Texture_emission"]
+gradient = SubResource("Gradient_emission")
+
+[resource]
+albedo_modulate = Color(0.2, 1, 0.3, 1)
+emission_energy = 4.0
+ambient_occlusion_enabled = false
+emission_texture = SubResource("Texture_emission")

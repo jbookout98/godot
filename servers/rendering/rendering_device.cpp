@@ -8088,6 +8088,11 @@ void RenderingDevice::_begin_frame(bool p_presented) {
 	}
 
 	if (frames[frame].timestamp_count) {
+		// The query results belong to the previous use of this frame-queue slot.
+		// Preserve that frame number before assigning the slot to the frame that
+		// is about to be recorded. Otherwise the Visual Profiler labels delayed
+		// CPU/GPU timestamp results with the current frame number.
+		frames[frame].timestamp_result_index = frames[frame].index;
 		driver->timestamp_query_pool_get_results(frames[frame].timestamp_pool, frames[frame].timestamp_count, frames[frame].timestamp_result_values.ptr());
 		driver->command_timestamp_query_pool_reset(frames[frame].command_buffer, frames[frame].timestamp_pool, frames[frame].timestamp_count);
 		SWAP(frames[frame].timestamp_names, frames[frame].timestamp_result_names);
@@ -8481,6 +8486,7 @@ Error RenderingDevice::initialize(RenderingContextDriver *p_context, DisplayServ
 		frames[i].timestamp_cpu_result_values.resize(max_timestamp_query_elements);
 		frames[i].timestamp_result_values.resize(max_timestamp_query_elements);
 		frames[i].timestamp_result_count = 0;
+		frames[i].timestamp_result_index = 0;
 
 		// Assign the main queue family and command pool to the command buffer pool.
 		frames[i].command_buffer_pool.pool = frames[i].command_pool;
@@ -8836,7 +8842,7 @@ uint32_t RenderingDevice::get_captured_timestamps_count() const {
 
 uint64_t RenderingDevice::get_captured_timestamps_frame() const {
 	ERR_RENDER_THREAD_GUARD_V(0);
-	return frames[frame].index;
+	return frames[frame].timestamp_result_index;
 }
 
 uint64_t RenderingDevice::get_captured_timestamp_gpu_time(uint32_t p_index) const {

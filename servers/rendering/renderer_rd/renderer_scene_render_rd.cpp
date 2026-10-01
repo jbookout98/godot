@@ -1369,6 +1369,7 @@ void RendererSceneRenderRD::render_scene(const Ref<RenderSceneBuffers> &p_render
 	RenderSceneDataRD scene_data;
 	{
 		// Our first camera is used by default
+		scene_data.scenario = p_camera_data->scenario;
 		scene_data.cam_transform = p_camera_data->main_transform;
 		scene_data.cam_projection = p_camera_data->main_projection;
 		scene_data.cam_orthogonal = p_camera_data->is_orthogonal;

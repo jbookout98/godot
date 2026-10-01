@@ -22,6 +22,8 @@ def configure(env):
 def get_doc_classes():
     return [
         "VoxelMaterial",
+        "VoxelLightingData",
+        "VoxelLightingBake3D",
         "VoxelShape3D",
         "VoxelShapeData",
         "VoxelVolume3D",

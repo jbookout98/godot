@@ -730,7 +730,19 @@ private:
 
 		struct SortByKey {
 			_FORCE_INLINE_ bool operator()(const GeometryInstanceSurfaceDataCache *A, const GeometryInstanceSurfaceDataCache *B) const {
-				return (A->sort.sort_key2 == B->sort.sort_key2) ? (A->sort.sort_key1 < B->sort.sort_key1) : (A->sort.sort_key2 < B->sort.sort_key2);
+				if (A->sort.sort_key2 != B->sort.sort_key2) {
+					return A->sort.sort_key2 < B->sort.sort_key2;
+				}
+				if (A->sort.sort_key1 != B->sort.sort_key1) {
+					return A->sort.sort_key1 < B->sort.sort_key1;
+				}
+				// Voxel proxies with the same batching keys remain one draw either
+				// way. Ordering those instances near-to-far lets their conservative
+				// DDA depth reject hidden proxies before fragment traversal.
+				if (A->shader != nullptr && A->shader->uses_voxel_batched_resources) {
+					return A->owner->depth < B->owner->depth;
+				}
+				return false;
 			}
 		};
 
@@ -835,6 +847,10 @@ protected:
 	// world occupancy table. Keeping the layout present in Forward+ allows the
 	// shared clustered shader to compile without changing normal materials.
 	virtual void _add_voxel_occupancy_uniforms(Vector<RD::Uniform> &r_uniforms);
+	// Screen-sized voxel lighting resources belong to the render-pass set rather
+	// than the persistent base set. Derived renderers replace these harmless
+	// defaults after their pre-opaque compute work has completed.
+	virtual void _add_voxel_local_shadow_uniforms(LocalVector<RD::Uniform> &r_uniforms, bool p_multiview);
 	// Derived renderers populate deterministic per-instance extension fields.
 	// The default implementation leaves the zero-initialized row untouched.
 	virtual void _fill_voxel_instance_data(RID p_base, VoxelInstanceData &r_instance_data) const {}

@@ -2692,6 +2692,7 @@ void RendererSceneCull::render_camera(const Ref<RenderSceneBuffers> &p_render_bu
 	}
 
 	RendererSceneRender::CameraData camera_data;
+	camera_data.scenario = p_scenario;
 
 	// Setup Camera(s)
 	if (p_xr_interface.is_null()) {
@@ -3768,6 +3769,7 @@ void RendererSceneCull::render_empty_scene(const Ref<RenderSceneBuffers> &p_rend
 	RENDER_TIMESTAMP("Render Empty 3D Scene");
 
 	RendererSceneRender::CameraData camera_data;
+	camera_data.scenario = p_scenario;
 	camera_data.set_camera(Transform3D(), Projection(), true, false);
 
 	scene_render->render_scene(p_render_buffers, &camera_data, &camera_data, PagedArray<RenderGeometryInstance *>(), PagedArray<RID>(), PagedArray<RID>(), PagedArray<RID>(), PagedArray<RID>(), PagedArray<RID>(), PagedArray<RID>(), environment, RID(), compositor, p_shadow_atlas, RID(), scenario->reflection_atlas, RID(), 0, 0, nullptr, 0, nullptr, 0, p_window_output_max_value, nullptr);
@@ -3833,6 +3835,7 @@ bool RendererSceneCull::_render_reflection_probe_step(Instance *p_instance, int 
 			local_view.set_look_at(origin_offset, origin_offset + view_normals[face], view_up[face]);
 
 			RendererSceneRender::CameraData camera_data;
+			camera_data.scenario = p_instance->scenario->self;
 			Transform3D xform = p_instance->transform * local_view;
 			camera_data.set_camera(xform, cm, false, false);
 
@@ -4403,6 +4406,7 @@ bool RendererSceneCull::free(RID p_rid) {
 
 		RSG::light_storage->shadow_atlas_free(scenario->reflection_probe_shadow_atlas);
 		RSG::light_storage->reflection_atlas_free(scenario->reflection_atlas);
+		scene_render->free_voxel_world(p_rid);
 		scenario_owner.free(p_rid);
 		RendererSceneOcclusionCull::get_singleton()->remove_scenario(p_rid);
 

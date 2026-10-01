@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="VoxelLightingData" inherits="Resource" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+ <brief_description>Saved world-space starting lighting for Voxel Forward DDGI.</brief_description>
+ <description>Created by [VoxelLightingBake3D]. Stores versioned irradiance and visibility samples with stable world-space probe identities. Invalid data falls back to dynamic lighting.</description>
+ <tutorials></tutorials>
+ <methods>
+  <method name="get_probe_count" qualifiers="const"><return type="int" /><description>Returns the number of stored probe records.</description></method>
+  <method name="validate" qualifiers="const"><return type="String" /><description>Returns an empty string for valid data, or a diagnostic describing an unsupported or corrupt cache.</description></method>
+ </methods>
+</class>

@@ -53,7 +53,16 @@ bool VoxelVolume3D::_uses_voxel_forward_shadow_mask() const {
 			axis_z.normalized().is_equal_approx(Vector3(0, 0, 1));
 }
 
+static Dictionary voxel_streaming_status() {
+	VoxelVolumeStreamingManager *manager = VoxelVolumeStreamingManager::get_singleton();
+	return manager ? manager->get_streaming_status() : Dictionary();
+}
+
 void VoxelVolume3D::_bind_methods() {
+	ClassDB::bind_static_method("VoxelVolume3D", D_METHOD("get_streaming_status"), &voxel_streaming_status);
+	ClassDB::bind_method(D_METHOD("set_voxel_shadows_enabled", "enabled"), &VoxelVolume3D::set_voxel_shadows_enabled);
+	ClassDB::bind_method(D_METHOD("is_voxel_shadows_enabled"), &VoxelVolume3D::is_voxel_shadows_enabled);
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "voxel_shadows_enabled"), "set_voxel_shadows_enabled", "is_voxel_shadows_enabled");
 	ClassDB::bind_method(D_METHOD("set_voxel_data", "data"), &VoxelVolume3D::set_voxel_data);
 	ClassDB::bind_method(D_METHOD("get_voxel_data"), &VoxelVolume3D::get_voxel_data);
 	ClassDB::bind_method(D_METHOD("set_voxel_material", "material"), &VoxelVolume3D::set_voxel_material);
@@ -145,7 +154,7 @@ void VoxelVolume3D::_rebuild_volume_textures() {
 	const bool resources_were_built = render_resources_built;
 	local_aabb = voxel_data.is_valid() ?
 			AABB(Vector3(), Vector3(voxel_data->get_dimensions()) * voxel_data->get_voxel_size()) : AABB();
-	const bool surface_needs_rebuild = !resources_were_built || local_aabb != previous_aabb;
+	bool surface_needs_rebuild = !resources_were_built || local_aabb != previous_aabb;
 	if (!streaming_resident) {
 		_sync_voxel_forward_volume(true);
 		if (render_resources_built) {
@@ -158,7 +167,10 @@ void VoxelVolume3D::_rebuild_volume_textures() {
 		_rebuild_shadow_proxy();
 		return;
 	}
-	if (runtime_material.is_null()) {
+	// Assigning data can change the batch key (especially null -> first data).
+	// Select the final material before binding textures, rather than compiling
+	// an unbatched variant that the next transform notification replaces.
+	if (runtime_material.is_null() || _make_runtime_material_batch_key() != runtime_material_batch_key) {
 		_rebuild_runtime_material();
 	}
 	mixed_brick_atlas.unref();
@@ -282,6 +294,20 @@ void VoxelVolume3D::_rebuild_procedural_surface() {
 	}
 }
 
+void VoxelVolume3D::set_voxel_shadows_enabled(bool p_enabled) {
+	if (voxel_shadows_enabled == p_enabled) {
+		return;
+	}
+	voxel_shadows_enabled = p_enabled;
+	set_cast_shadows_setting((!voxel_shadows_enabled || _uses_voxel_forward_shadow_mask() || _uses_shadow_proxy()) ? SHADOW_CASTING_SETTING_OFF : SHADOW_CASTING_SETTING_ON);
+	_sync_shadow_proxy_instance();
+	_sync_voxel_forward_volume();
+}
+
+bool VoxelVolume3D::is_voxel_shadows_enabled() const {
+	return voxel_shadows_enabled;
+}
+
 void VoxelVolume3D::_ensure_shadow_proxy() {
 	if (!_uses_shadow_proxy() || shadow_proxy_instance.is_valid()) {
 		return;
@@ -298,7 +324,7 @@ void VoxelVolume3D::_ensure_shadow_proxy() {
 void VoxelVolume3D::_sync_shadow_proxy_instance() {
 	RenderingServer *rendering_server = RenderingServer::get_singleton();
 	ERR_FAIL_NULL(rendering_server);
-	const bool enabled = _uses_shadow_proxy();
+	const bool enabled = voxel_shadows_enabled && _uses_shadow_proxy();
 	if (enabled) {
 		_ensure_shadow_proxy();
 	}
@@ -464,7 +490,7 @@ void VoxelVolume3D::_sync_voxel_forward_volume(bool p_remove) {
 
 	RenderingServer *rendering_server = RenderingServer::get_singleton();
 	ERR_FAIL_NULL(rendering_server);
-	if (p_remove || !streaming_resident || voxel_data.is_null() || voxel_data->get_brick_storage().get_occupied_voxel_count() == 0 || mixed_brick_atlas.is_null() || brick_directory_texture.is_null()) {
+	if (p_remove || !is_inside_tree() || !is_inside_world() || !is_visible_in_tree() || !streaming_resident || voxel_data.is_null() || voxel_data->get_brick_storage().get_occupied_voxel_count() == 0 || mixed_brick_atlas.is_null() || brick_directory_texture.is_null()) {
 		rendering_server->call_on_render_thread(callable_mp_static(&VoxelForwardVolumeStorage::volume_remove_on_render_thread).bind(procedural_surface));
 		voxel_forward_dirty_valid = false;
 		return;
@@ -478,8 +504,18 @@ void VoxelVolume3D::_sync_voxel_forward_volume(bool p_remove) {
 			(dimensions.z + VoxelBrickStorage::BRICK_SIZE - 1) / VoxelBrickStorage::BRICK_SIZE);
 	const Ref<Texture2D> palette_texture = voxel_material.is_valid() && voxel_material->get_palette_texture().is_valid() ? voxel_material->get_palette_texture() : voxel_data->get_palette_texture();
 	const Ref<Texture2D> material_texture = voxel_material.is_valid() && voxel_material->get_material_texture().is_valid() ? voxel_material->get_material_texture() : voxel_data->get_material_texture();
+	const Ref<Texture2D> metallic_texture = voxel_material.is_valid() && voxel_material->get_metallic_texture().is_valid() ? voxel_material->get_metallic_texture() : voxel_data->get_metallic_texture();
+	const Ref<Texture2D> specularity_texture = voxel_material.is_valid() && voxel_material->get_specularity_texture().is_valid() ? voxel_material->get_specularity_texture() : voxel_data->get_specularity_texture();
+	const Ref<Texture2D> emission_texture = voxel_material.is_valid() && voxel_material->get_emission_texture().is_valid() ? voxel_material->get_emission_texture() : voxel_data->get_emission_texture();
+	const Ref<Texture2D> transparency_texture = voxel_material.is_valid() && voxel_material->get_transparency_texture().is_valid() ? voxel_material->get_transparency_texture() : voxel_data->get_transparency_texture();
 	const RID palette = palette_texture.is_valid() ? palette_texture->get_rid() : fallback_palette->get_rid();
 	const RID material = material_texture.is_valid() ? material_texture->get_rid() : fallback_material->get_rid();
+	// Every descriptor remains valid, while the explicit flags decide whether a
+	// separate channel or the legacy packed material palette is authoritative.
+	const RID metallic_rid = metallic_texture.is_valid() ? metallic_texture->get_rid() : material;
+	const RID specularity_rid = specularity_texture.is_valid() ? specularity_texture->get_rid() : material;
+	const RID emission_rid = emission_texture.is_valid() ? emission_texture->get_rid() : material;
+	const RID transparency_rid = transparency_texture.is_valid() ? transparency_texture->get_rid() : material;
 	const RID neighbor = neighbor_face_texture.is_valid() ? neighbor_face_texture->get_rid() : fallback_neighbor_face_texture->get_rid();
 	const VoxelBrickStorage &storage = voxel_data->get_brick_storage();
 	PackedByteArray occupancy_directory;
@@ -520,13 +556,21 @@ void VoxelVolume3D::_sync_voxel_forward_volume(bool p_remove) {
 		directory_write[brick_index * 4 + 2] = uint8_t((directory_code >> 16) & 0xFF);
 		directory_write[brick_index * 4 + 3] = uint8_t((directory_code >> 24) & 0xFF);
 	}
-	rendering_server->call_on_render_thread(callable_mp_static(&VoxelForwardVolumeStorage::volume_set_on_render_thread).bind(
+	rendering_server->call_on_render_thread(callable_mp_static(&VoxelForwardVolumeStorage::volume_set_on_render_thread).bind(get_world_3d()->get_scenario(),
 			procedural_surface,
 			mixed_brick_atlas->get_rid(),
 			brick_directory_texture->get_rid(),
 			neighbor,
 			palette,
 			material,
+			metallic_rid,
+			specularity_rid,
+			emission_rid,
+			transparency_rid,
+			metallic_texture.is_valid(),
+			specularity_texture.is_valid(),
+			emission_texture.is_valid(),
+			transparency_texture.is_valid(),
 			occupancy_directory,
 			occupancy_bricks,
 			dimensions,
@@ -542,7 +586,7 @@ void VoxelVolume3D::_sync_voxel_forward_volume(bool p_remove) {
 			voxel_material.is_valid() ? float(voxel_material->get_outline_width()) : 1.0f,
 			voxel_forward_dirty_valid ? voxel_forward_dirty_position : Vector3i(),
 			voxel_forward_dirty_valid ? voxel_forward_dirty_size : Vector3i(),
-			int64_t(voxel_data->get_revision())));
+			int64_t(voxel_data->get_revision()), voxel_shadows_enabled));
 	voxel_forward_dirty_valid = false;
 }
 
@@ -581,6 +625,9 @@ void VoxelVolume3D::_release_runtime_material() {
 }
 
 void VoxelVolume3D::_rebuild_runtime_material() {
+	// A mesh surface stores a material RID, not a Resource reference. Keep the
+	// previous material alive until the surface has been rebound below.
+	const Ref<VoxelMaterial> previous_material = runtime_material;
 	_ensure_fallback_textures();
 	const String requested_batch_key = _make_runtime_material_batch_key();
 	if (runtime_material.is_null() || requested_batch_key != runtime_material_batch_key) {
@@ -616,6 +663,10 @@ void VoxelVolume3D::_rebuild_runtime_material() {
 		runtime_material->set_ambient_occlusion_color(voxel_material->get_ambient_occlusion_color());
 		runtime_material->set_ambient_occlusion_strength(voxel_material->get_ambient_occlusion_strength());
 		runtime_material->set_ambient_occlusion_hardness(voxel_material->get_ambient_occlusion_hardness());
+		runtime_material->set_ambient_occlusion_direct_light_influence(voxel_material->get_ambient_occlusion_direct_light_influence());
+		runtime_material->set_ambient_occlusion_tint_enabled(voxel_material->is_ambient_occlusion_tint_enabled());
+		runtime_material->set_ambient_occlusion_tint_strength(voxel_material->get_ambient_occlusion_tint_strength());
+		runtime_material->set_ambient_occlusion_tint_palette_texture(voxel_material->get_ambient_occlusion_tint_palette_texture());
 		runtime_material->set_ambient_occlusion_mode(voxel_material->get_ambient_occlusion_mode());
 		runtime_material->set_ambient_occlusion_face_mode(voxel_material->get_ambient_occlusion_face_mode());
 		runtime_material->set_outline_enabled(voxel_material->is_outline_enabled());
@@ -633,11 +684,21 @@ void VoxelVolume3D::_rebuild_runtime_material() {
 		runtime_material->set_ambient_occlusion_color(Color(0.0, 0.0, 0.0, 1.0));
 		runtime_material->set_ambient_occlusion_strength(1.0);
 		runtime_material->set_ambient_occlusion_hardness(0.5);
+		runtime_material->set_ambient_occlusion_direct_light_influence(0.0);
+		runtime_material->set_ambient_occlusion_tint_enabled(true);
+		runtime_material->set_ambient_occlusion_tint_strength(1.0);
+		runtime_material->set_ambient_occlusion_tint_palette_texture(Ref<Texture2D>());
 		runtime_material->set_ambient_occlusion_mode(VoxelMaterial::AMBIENT_OCCLUSION_MODE_VOXELIZED);
 		runtime_material->set_ambient_occlusion_face_mode(VoxelMaterial::AMBIENT_OCCLUSION_FACE_MODE_ALL);
 		runtime_material->set_outline_enabled(false);
 		runtime_material->set_outline_color(Color(0.0, 0.0, 0.0, 1.0));
 		runtime_material->set_outline_width(1.0);
+	}
+	if (runtime_material != previous_material && procedural_surface.is_valid()) {
+		RenderingServer *rendering_server = RenderingServer::get_singleton();
+		if (rendering_server->mesh_get_surface_count(procedural_surface) > 0) {
+			rendering_server->mesh_surface_set_material(procedural_surface, 0, runtime_material->get_rid());
+		}
 	}
 }
 
@@ -718,6 +779,10 @@ void VoxelVolume3D::_voxel_material_changed() {
 		runtime_material->set_ambient_occlusion_color(voxel_material->get_ambient_occlusion_color());
 		runtime_material->set_ambient_occlusion_strength(voxel_material->get_ambient_occlusion_strength());
 		runtime_material->set_ambient_occlusion_hardness(voxel_material->get_ambient_occlusion_hardness());
+		runtime_material->set_ambient_occlusion_direct_light_influence(voxel_material->get_ambient_occlusion_direct_light_influence());
+		runtime_material->set_ambient_occlusion_tint_enabled(voxel_material->is_ambient_occlusion_tint_enabled());
+		runtime_material->set_ambient_occlusion_tint_strength(voxel_material->get_ambient_occlusion_tint_strength());
+		runtime_material->set_ambient_occlusion_tint_palette_texture(voxel_material->get_ambient_occlusion_tint_palette_texture());
 		runtime_material->set_ambient_occlusion_mode(voxel_material->get_ambient_occlusion_mode());
 		runtime_material->set_ambient_occlusion_face_mode(voxel_material->get_ambient_occlusion_face_mode());
 		return;
@@ -1038,12 +1103,37 @@ void VoxelVolume3D::update_neighbor_faces(VoxelVolume3D *const p_neighbors[NEIGH
 	}
 }
 
+void VoxelVolume3D::append_cached_neighbor_ids(Vector<ObjectID> &r_ids) const {
+	for (int face = 0; face < NEIGHBOR_FACE_COUNT; face++) {
+		if (neighbor_ids[face].is_valid()) {
+			r_ids.push_back(neighbor_ids[face]);
+		}
+	}
+	for (int diagonal = 0; diagonal < NEIGHBOR_DIAGONAL_COUNT; diagonal++) {
+		if (neighbor_diagonal_ids[diagonal].is_valid()) {
+			r_ids.push_back(neighbor_diagonal_ids[diagonal]);
+		}
+	}
+}
+
+void VoxelVolume3D::refresh_cached_neighbor_faces() {
+	VoxelVolume3D *faces[NEIGHBOR_FACE_COUNT] = {};
+	VoxelVolume3D *diagonals[NEIGHBOR_DIAGONAL_COUNT] = {};
+	for (int face = 0; face < NEIGHBOR_FACE_COUNT; face++) {
+		faces[face] = Object::cast_to<VoxelVolume3D>(ObjectDB::get_instance(neighbor_ids[face]));
+	}
+	for (int diagonal = 0; diagonal < NEIGHBOR_DIAGONAL_COUNT; diagonal++) {
+		diagonals[diagonal] = Object::cast_to<VoxelVolume3D>(ObjectDB::get_instance(neighbor_diagonal_ids[diagonal]));
+	}
+	update_neighbor_faces(faces, diagonals);
+}
+
 void VoxelVolume3D::_notification(int p_what) {
 	if (p_what == NOTIFICATION_ENTER_TREE) {
 		// Serialized scenes may restore the main instance's shadow flag after the
 		// constructor. The proxy must be the only caster or the DDA shader will
 		// still run in every cascade and erase the performance gain.
-		if (_uses_voxel_forward_shadow_mask() || _uses_shadow_proxy()) {
+		if (!voxel_shadows_enabled || _uses_voxel_forward_shadow_mask() || _uses_shadow_proxy()) {
 			set_cast_shadows_setting(SHADOW_CASTING_SETTING_OFF);
 		} else {
 			set_cast_shadows_setting(SHADOW_CASTING_SETTING_ON);
@@ -1067,22 +1157,24 @@ void VoxelVolume3D::_notification(int p_what) {
 		}
 	} else if (p_what == NOTIFICATION_ENTER_WORLD) {
 		_sync_shadow_proxy_instance();
+		_sync_voxel_forward_volume();
 	} else if (p_what == NOTIFICATION_EXIT_WORLD) {
+		_sync_voxel_forward_volume(true);
 		if (shadow_proxy_instance.is_valid()) {
 			RenderingServer::get_singleton()->instance_set_scenario(shadow_proxy_instance, RID());
 		}
 	} else if (p_what == NOTIFICATION_VISIBILITY_CHANGED) {
 		_sync_shadow_proxy_instance();
+		_sync_voxel_forward_volume();
 	} else if (p_what == NOTIFICATION_TRANSFORM_CHANGED) {
 		if (is_inside_tree()) {
-			set_cast_shadows_setting((_uses_voxel_forward_shadow_mask() || _uses_shadow_proxy()) ? SHADOW_CASTING_SETTING_OFF : SHADOW_CASTING_SETTING_ON);
+			set_cast_shadows_setting((!voxel_shadows_enabled || _uses_voxel_forward_shadow_mask() || _uses_shadow_proxy()) ? SHADOW_CASTING_SETTING_OFF : SHADOW_CASTING_SETTING_ON);
 		}
 		_sync_shadow_proxy_instance();
 		const String requested_batch_key = _make_runtime_material_batch_key();
 		if (streaming_resident && requested_batch_key != runtime_material_batch_key) {
 			_rebuild_runtime_material();
 			_update_material_bindings(false);
-			_rebuild_procedural_surface();
 		}
 		if (is_inside_tree() && streaming_resident && procedural_surface.is_valid() && RendererSceneRenderImplementation::VoxelForwardVolumeStorage::get_singleton() != nullptr) {
 			RenderingServer::get_singleton()->call_on_render_thread(callable_mp_static(&RendererSceneRenderImplementation::VoxelForwardVolumeStorage::volume_transform_set_on_render_thread).bind(procedural_surface, get_global_transform()));
@@ -1112,7 +1204,6 @@ void VoxelVolume3D::set_voxel_material(const Ref<VoxelMaterial> &p_material) {
 	if (streaming_resident) {
 		_rebuild_runtime_material();
 		_update_material_bindings();
-		_rebuild_procedural_surface();
 	} else {
 		_release_runtime_material();
 	}
@@ -1140,7 +1231,6 @@ VoxelVolume3D::VoxelVolume3D() {
 
 VoxelVolume3D::~VoxelVolume3D() {
 	_sync_voxel_forward_volume(true);
-	_release_runtime_material();
 	if (voxel_data.is_valid()) {
 		voxel_data->disconnect_changed(callable_mp(this, &VoxelVolume3D::_voxel_data_changed));
 		voxel_data->disconnect(SNAME("voxels_changed"), callable_mp(this, &VoxelVolume3D::_voxel_data_voxels_changed));
@@ -1157,4 +1247,6 @@ VoxelVolume3D::~VoxelVolume3D() {
 	if (shadow_proxy_mesh.is_valid() && RenderingServer::get_singleton() != nullptr) {
 		RenderingServer::get_singleton()->free_rid(shadow_proxy_mesh);
 	}
+	// Free surfaces before their last material reference, including scene reload.
+	_release_runtime_material();
 }

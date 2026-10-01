@@ -303,6 +303,7 @@ public:
 	};
 
 	struct CameraData {
+		RID scenario;
 		// flags
 		uint32_t view_count;
 		bool is_orthogonal;
@@ -344,6 +345,7 @@ public:
 
 	virtual PackedByteArray bake_render_area_light_atlas(const TypedArray<RID> &p_area_light_textures, const TypedArray<Rect2> &p_area_light_atlas_texture_rects, const Size2i &p_size, int p_mipmaps) = 0;
 
+	virtual void free_voxel_world(RID p_scenario) {}
 	virtual bool free(RID p_rid) = 0;
 
 	virtual void sdfgi_set_debug_probe_select(const Vector3 &p_position, const Vector3 &p_dir) = 0;

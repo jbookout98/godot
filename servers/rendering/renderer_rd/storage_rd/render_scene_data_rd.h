@@ -42,6 +42,7 @@ class RenderSceneDataRD : public RenderSceneData {
 public:
 	bool calculate_motion_vectors = false;
 
+	RID scenario;
 	Transform3D cam_transform;
 	Projection cam_projection;
 	Vector2 taa_jitter;

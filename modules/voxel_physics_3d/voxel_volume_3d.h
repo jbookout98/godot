@@ -29,6 +29,7 @@ public:
 
 private:
 
+	bool voxel_shadows_enabled = true;
 	RID procedural_surface;
 	// Stable low-resolution geometry used only by shadow passes. The visible
 	// surface remains the committed DDA shader and never renders this mesh.
@@ -108,6 +109,8 @@ protected:
 	void _validate_property(PropertyInfo &p_property) const;
 
 public:
+	void set_voxel_shadows_enabled(bool p_enabled);
+	bool is_voxel_shadows_enabled() const;
 	void set_voxel_data(const Ref<VoxelShapeData> &p_data);
 	Ref<VoxelShapeData> get_voxel_data() const;
 	void set_voxel_material(const Ref<VoxelMaterial> &p_material);
@@ -133,6 +136,8 @@ public:
 	static int get_neighbor_diagonal_index(const Vector3i &p_offset);
 	static Vector3i get_neighbor_diagonal_offset(int p_index);
 	void update_neighbor_faces(VoxelVolume3D *const p_neighbors[NEIGHBOR_FACE_COUNT], VoxelVolume3D *const p_diagonal_neighbors[NEIGHBOR_DIAGONAL_COUNT]);
+	void append_cached_neighbor_ids(Vector<ObjectID> &r_ids) const;
+	void refresh_cached_neighbor_faces();
 
 	AABB get_aabb() const override;
 

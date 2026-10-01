@@ -676,9 +676,13 @@ void light_process_omni(uint idx, vec3 vertex, vec3 lighting_vertex, bool use_vo
 		// Use the same representative point as direct lighting. For voxel-face
 		// mode this makes visibility constant across the complete receiver face;
 		// exact-hit mode passes vertex as lighting_vertex and remains per-pixel.
-		vec3 shadow_light_vector = omni_lights.data[idx].position - lighting_vertex;
-		float shadow_light_distance = length(shadow_light_vector);
-		float occupancy_visibility = voxel_occupancy_local_shadow(lighting_vertex, vec3(normal), shadow_light_vector / max(shadow_light_distance, 0.0001), shadow_light_distance);
+		float occupancy_visibility = 1.0;
+		bool resolved_local_shadow = voxel_local_shadow_mask(0u, idx, screen_uv, occupancy_visibility);
+		if (!resolved_local_shadow) {
+			vec3 shadow_light_vector = omni_lights.data[idx].position - lighting_vertex;
+			float shadow_light_distance = length(shadow_light_vector);
+			occupancy_visibility = voxel_occupancy_local_shadow(lighting_vertex, vec3(normal), shadow_light_vector / max(shadow_light_distance, 0.0001), shadow_light_distance);
+		}
 		shadow *= half(mix(1.0, occupancy_visibility, omni_lights.data[idx].shadow_opacity));
 	}
 #endif
@@ -946,9 +950,13 @@ void light_process_spot(uint idx, vec3 vertex, vec3 lighting_vertex, bool use_vo
 #endif // SHADOWS_DISABLED
 #if defined(VOXEL_OCCUPANCY_SHADOWS_USED) && defined(VOXEL_OCCUPANCY_AVAILABLE)
 	if (use_voxel_occupancy_shadow && spot_attenuation > HALF_FLT_MIN && spot_lights.data[idx].shadow_opacity > 0.001) {
-		vec3 shadow_light_vector = spot_lights.data[idx].position - lighting_vertex;
-		float shadow_light_distance = length(shadow_light_vector);
-		float occupancy_visibility = voxel_occupancy_local_shadow(lighting_vertex, vec3(normal), shadow_light_vector / max(shadow_light_distance, 0.0001), shadow_light_distance);
+		float occupancy_visibility = 1.0;
+		bool resolved_local_shadow = voxel_local_shadow_mask(1u, idx, screen_uv, occupancy_visibility);
+		if (!resolved_local_shadow) {
+			vec3 shadow_light_vector = spot_lights.data[idx].position - lighting_vertex;
+			float shadow_light_distance = length(shadow_light_vector);
+			occupancy_visibility = voxel_occupancy_local_shadow(lighting_vertex, vec3(normal), shadow_light_vector / max(shadow_light_distance, 0.0001), shadow_light_distance);
+		}
 		shadow *= half(mix(1.0, occupancy_visibility, spot_lights.data[idx].shadow_opacity));
 	}
 #endif

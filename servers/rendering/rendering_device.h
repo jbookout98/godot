@@ -1843,6 +1843,7 @@ private:
 		TightLocalVector<uint64_t> timestamp_result_values;
 		uint32_t timestamp_result_count = 0;
 		uint64_t index = 0;
+		uint64_t timestamp_result_index = 0;
 	};
 
 	uint32_t max_timestamp_query_elements = 0;

@@ -875,6 +875,10 @@ void main() {
 #define SHADER_IS_SRGB false
 #define SHADER_SPACE_FAR 0.0
 
+// Let the depth test use the resolved DDA hit. A conservative depth_less
+// declaration causes overlapping voxel proxies to overwrite nearer surfaces
+// on affected drivers, including when the hit is clamped to the proxy depth.
+
 #ifdef USE_MULTIVIEW
 #define OUTPUT_IS_MULTIVIEW true
 #else
@@ -1111,6 +1115,27 @@ layout(location = 2) out vec2 motion_vector;
 #define VOXEL_OCCUPANCY_AVAILABLE
 
 #if defined(VOXEL_OCCUPANCY_SHADOWS_USED)
+bool voxel_local_shadow_mask(uint light_type, uint light_index, vec2 screen_uv, out float visibility) {
+	visibility = 1.0;
+	if (voxel_local_shadows.state.w == 0) {
+		return false;
+	}
+	int entry_count = clamp(voxel_local_shadows.state.z, 0, 32);
+	for (int entry_index = 0; entry_index < 32; entry_index++) {
+		if (entry_index >= entry_count) {
+			break;
+		}
+		ivec4 indices = voxel_local_shadows.entries[entry_index].indices;
+		if (indices.x == int(light_type) && indices.y == int(light_index)) {
+			ivec2 mask_size = textureSize(voxel_local_shadow_masks, 0).xy;
+			ivec2 pixel = clamp(ivec2(screen_uv * vec2(mask_size)), ivec2(0), mask_size - 1);
+			visibility = texelFetch(voxel_local_shadow_masks, ivec3(pixel, indices.z), 0).r;
+			return true;
+		}
+	}
+	return false;
+}
+
 uint voxel_occupancy_brick_hash(ivec3 position) {
 	return uint(position.x) * 73856093u ^ uint(position.y) * 19349663u ^ uint(position.z) * 83492791u;
 }

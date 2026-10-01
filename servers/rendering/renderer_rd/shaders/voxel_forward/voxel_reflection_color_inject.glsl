@@ -10,6 +10,12 @@ layout(rgba8, set = 0, binding = 0) uniform restrict writeonly image3D color_gri
 layout(set = 0, binding = 1) uniform sampler3D voxel_texture;
 layout(set = 0, binding = 2) uniform sampler3D brick_texture;
 layout(set = 0, binding = 3) uniform sampler2D palette_texture;
+layout(set = 0, binding = 4) uniform sampler2D material_texture;
+layout(rgba8, set = 0, binding = 5) uniform restrict writeonly image3D material_grid;
+layout(set = 0, binding = 6) uniform sampler2D transparency_texture;
+layout(set = 0, binding = 7) uniform sampler2D metallic_texture;
+layout(set = 0, binding = 8) uniform sampler2D specularity_texture;
+layout(set = 0, binding = 9) uniform sampler2D emission_texture;
 
 layout(push_constant, std430) uniform Params {
 	mat4 world_to_voxel;
@@ -61,5 +67,23 @@ void main() {
 		return;
 	}
 	vec4 albedo = texelFetch(palette_texture, ivec2(clamp(voxel_id, 0, 255), 0), 0);
-	imageStore(color_grid, grid_cell, vec4(albedo.rgb, 1.0));
+	ivec2 palette_texel = ivec2(clamp(voxel_id, 0, 255), 0);
+	vec4 material = texelFetch(material_texture, palette_texel, 0);
+	int channel_flags = params.dispatch_origin.w;
+	// Dedicated grayscale maps use the same conventions as visible voxel
+	// shading: white means non-metallic/no emission, and red directly stores
+	// roughness for the inverted-specularity map.
+	if ((channel_flags & 2) != 0) material.g = 1.0 - texelFetch(metallic_texture, palette_texel, 0).r;
+	if ((channel_flags & 4) != 0) material.r = texelFetch(specularity_texture, palette_texel, 0).r;
+	if ((channel_flags & 8) != 0) material.b = 1.0 - texelFetch(emission_texture, palette_texel, 0).r;
+	// Authored transparency lookups are inverted grayscale: white is opaque
+	// and black is fully transmissive. Pack physical transparency in alpha.
+	material.a = (channel_flags & 1) != 0 ? 1.0 - texelFetch(transparency_texture, palette_texel, 0).r : 0.0;
+	// Alpha packs validity in the upper half and emission in the remaining
+	// range. This preserves black source materials without a second clipmap.
+	imageStore(color_grid, grid_cell, vec4(albedo.rgb, 0.5 + clamp(material.b, 0.0, 1.0) * 0.5));
+	// Preserve the palette material channels for directional diffuse injection.
+	// The color clipmap remains unchanged because reflections and DDGI already
+	// consume its alpha packing.
+	imageStore(material_grid, grid_cell, material);
 }

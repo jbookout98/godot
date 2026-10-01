@@ -114,11 +114,44 @@
 		</method>
 	</methods>
 	<members>
+		<member name="ambient_occlusion_contrast" type="float" setter="set_ambient_occlusion_contrast" getter="get_ambient_occlusion_contrast" default="0.5">
+			Shapes the geometric occlusion response. At the midpoint, Voxelized mode retains its 25%, 50%, 75%, and 100% progression. Higher values suppress weak occlusion and emphasize enclosed areas. This is the Inspector-facing alias of the legacy [member ambient_occlusion_hardness] property.
+		</member>
+		<member name="ambient_occlusion_direct_light_influence" type="float" setter="set_ambient_occlusion_direct_light_influence" getter="get_ambient_occlusion_direct_light_influence" default="0.0">
+			Amount by which ambient occlusion affects direct lights. Keep this at [code]0.0[/code] for ambient-only occlusion; increase it only for stylized contact darkening.
+		</member>
+		<member name="ambient_occlusion_enabled" type="bool" setter="set_ambient_occlusion_enabled" getter="is_ambient_occlusion_enabled" default="true">
+			Enables voxel-neighbor ambient occlusion.
+		</member>
+		<member name="ambient_occlusion_fallback_tint" type="Color" setter="set_ambient_occlusion_color" getter="get_ambient_occlusion_color" default="Color(0, 0, 0, 1)">
+			Fallback tint used when tinting is enabled without a per-ID tint palette. Tint colors are normalized before use so intensity, rather than color brightness, controls AO darkness.
+		</member>
+		<member name="ambient_occlusion_intensity" type="float" setter="set_ambient_occlusion_intensity" getter="get_ambient_occlusion_intensity" default="1.0">
+			Maximum AO darkening after applying the contrast curve. This is the Inspector-facing alias of the legacy [member ambient_occlusion_strength] property.
+		</member>
+		<member name="ambient_occlusion_tint_enabled" type="bool" setter="set_ambient_occlusion_tint_enabled" getter="is_ambient_occlusion_tint_enabled" default="true">
+			Enables color tinting independently of AO darkening.
+		</member>
+		<member name="ambient_occlusion_tint_palette_texture" type="Texture2D" setter="set_ambient_occlusion_tint_palette_texture" getter="get_ambient_occlusion_tint_palette_texture">
+			Optional 256 by 1 color lookup. Voxel ID [code]n[/code] selects texel [code]n[/code]. White is neutral. When empty, [member ambient_occlusion_fallback_tint] is used and the palette fetch is omitted from the shader variant.
+		</member>
+		<member name="ambient_occlusion_tint_strength" type="float" setter="set_ambient_occlusion_tint_strength" getter="get_ambient_occlusion_tint_strength" default="1.0">
+			Strength of the AO hue shift. A value of [code]0.0[/code] removes tinting while preserving geometric AO darkness.
+		</member>
+		<member name="ambient_occlusion_color" type="Color" setter="set_ambient_occlusion_color" getter="get_ambient_occlusion_color" default="Color(0, 0, 0, 1)">
+			Legacy serialized name for [member ambient_occlusion_fallback_tint]. Retained for compatibility.
+		</member>
+		<member name="ambient_occlusion_strength" type="float" setter="set_ambient_occlusion_strength" getter="get_ambient_occlusion_strength" default="1.0">
+			Legacy serialized name for [member ambient_occlusion_intensity]. Values are clamped between [code]0.0[/code] and [code]1.0[/code].
+		</member>
+		<member name="ambient_occlusion_hardness" type="float" setter="set_ambient_occlusion_hardness" getter="get_ambient_occlusion_hardness" default="0.5">
+			Legacy serialized name for [member ambient_occlusion_contrast]. Retained for compatibility.
+		</member>
 		<member name="albedo_modulate" type="Color" setter="set_albedo_modulate" getter="get_albedo_modulate" default="Color(1, 1, 1, 1)">
 			Color multiplied with every palette albedo. This changes the whole material without altering [VoxelShapeData].
 		</member>
 		<member name="emission_texture" type="Texture2D" setter="set_emission_texture" getter="get_emission_texture">
-			Palette-indexed emission lookup.
+			Palette-indexed emission lookup. Use a 256-by-1 texture whose texel index matches the voxel ID. The red channel is inverted: black emits fully, white emits nothing. Emission is tinted by the palette color and multiplied by [member emission_energy].
 		</member>
 		<member name="emission_energy" type="float" setter="set_emission_energy" getter="get_emission_energy" default="1.0">
 			Multiplier applied to the emission channel of [member VoxelShapeData.material_texture]. Values below zero are clamped to zero.

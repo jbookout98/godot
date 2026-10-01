@@ -1,8 +1,8 @@
 #include "godot_voxel_collision_solver_3d.h"
 
+#include "gjk_epa.h"
 #include "godot_collision_solver_3d_sat.h"
 #include "godot_voxel_shape_3d.h"
-#include "gjk_epa.h"
 
 #include "core/templates/hash_set.h"
 #include "core/templates/local_vector.h"
@@ -31,6 +31,7 @@ struct VoxelCallbackContext {
 	bool swap = false;
 	bool collided = false;
 	bool limit_reached = false;
+	bool stop_at_limit = true;
 	uint32_t candidate_limit = MAX_VOXEL_CONTACT_CANDIDATES_PER_PASS;
 	int feature_index = -1;
 	int other_index = -1;
@@ -67,9 +68,61 @@ bool _candidate_stable_less(const VoxelContactCandidate &p_a, const VoxelContact
 	return false;
 }
 
-void _store_candidate(LocalVector<VoxelContactCandidate> &r_candidates, const VoxelContactCandidate &p_candidate) {
-	if (r_candidates.size() < MAX_VOXEL_CONTACT_CANDIDATES) {
+int _candidate_normal_bucket(const Vector3 &p_normal) {
+	const Vector3 absolute_normal = p_normal.abs();
+	int axis = 0;
+	if (absolute_normal.y > absolute_normal.x) {
+		axis = 1;
+	}
+	if (absolute_normal.z > absolute_normal[axis]) {
+		axis = 2;
+	}
+	return axis * 2 + (p_normal[axis] < 0.0 ? 1 : 0);
+}
+
+void _store_candidate(LocalVector<VoxelContactCandidate> &r_candidates, const VoxelContactCandidate &p_candidate, uint32_t p_limit) {
+	if (p_limit == 0) {
+		return;
+	}
+	if (r_candidates.size() < p_limit) {
 		r_candidates.push_back(p_candidate);
+		return;
+	}
+
+	const int candidate_bucket = _candidate_normal_bucket(p_candidate.normal);
+	int bucket_counts[6] = {};
+	int shallowest_same_bucket = -1;
+	for (uint32_t i = 0; i < r_candidates.size(); i++) {
+		const int bucket = _candidate_normal_bucket(r_candidates[i].normal);
+		bucket_counts[bucket]++;
+		if (bucket == candidate_bucket &&
+				(shallowest_same_bucket < 0 || r_candidates[i].penetration < r_candidates[shallowest_same_bucket].penetration)) {
+			shallowest_same_bucket = i;
+		}
+	}
+
+	if (shallowest_same_bucket >= 0) {
+		if (p_candidate.penetration > r_candidates[shallowest_same_bucket].penetration) {
+			r_candidates[shallowest_same_bucket] = p_candidate;
+		}
+		return;
+	}
+
+	int donor_bucket = 0;
+	for (int bucket = 1; bucket < 6; bucket++) {
+		if (bucket_counts[bucket] > bucket_counts[donor_bucket]) {
+			donor_bucket = bucket;
+		}
+	}
+	int replacement = -1;
+	for (uint32_t i = 0; i < r_candidates.size(); i++) {
+		if (_candidate_normal_bucket(r_candidates[i].normal) == donor_bucket &&
+				(replacement < 0 || r_candidates[i].penetration < r_candidates[replacement].penetration)) {
+			replacement = i;
+		}
+	}
+	if (replacement >= 0) {
+		r_candidates[replacement] = p_candidate;
 	}
 }
 
@@ -82,7 +135,7 @@ void _voxel_contact_callback(
 		void *p_userdata) {
 	VoxelCallbackContext *context = static_cast<VoxelCallbackContext *>(p_userdata);
 	context->collided = true;
-	if (context->candidates->size() >= context->candidate_limit) {
+	if (context->stop_at_limit && context->candidates->size() >= context->candidate_limit) {
 		context->limit_reached = true;
 		return;
 	}
@@ -103,8 +156,8 @@ void _voxel_contact_callback(
 	}
 	candidate.penetration = Math::abs(
 			(candidate.point_a - candidate.point_b).dot(candidate.normal));
-	_store_candidate(*context->candidates, candidate);
-	context->limit_reached = context->candidates->size() >= context->candidate_limit;
+	_store_candidate(*context->candidates, candidate, context->candidate_limit);
+	context->limit_reached = context->stop_at_limit && context->candidates->size() >= context->candidate_limit;
 }
 
 Vector3i _index_to_voxel(int p_index, const Vector3i &p_dimensions) {
@@ -159,8 +212,7 @@ Transform3D _solid_voxel_transform(
 		const Transform3D &p_voxel_transform,
 		const Vector3i &p_voxel,
 		real_t p_voxel_size) {
-	return p_voxel_transform * Transform3D(
-			Basis(), (Vector3(p_voxel) + Vector3(0.5, 0.5, 0.5)) * p_voxel_size);
+	return p_voxel_transform * Transform3D(Basis(), (Vector3(p_voxel) + Vector3(0.5, 0.5, 0.5)) * p_voxel_size);
 }
 
 bool _distance_convex_to_voxel(
@@ -219,15 +271,15 @@ bool _distance_convex_to_voxel(
 		// iteration. Keeping the full hint here repeatedly scanned future floor
 		// and wall cells while a CharacterBody3D was sliding against a wall.
 		const GodotShape3D *base_shape = p_convex_shape;
-		const GodotMotionShape3D *motion_shape = nullptr;
+		const GodotMotionShape3D *query_motion_shape = nullptr;
 		if (p_convex_shape->is_motion_shape()) {
-			motion_shape = static_cast<const GodotMotionShape3D *>(p_convex_shape);
-			base_shape = motion_shape->shape;
+			query_motion_shape = static_cast<const GodotMotionShape3D *>(p_convex_shape);
+			base_shape = query_motion_shape->shape;
 		}
 		if (base_shape != nullptr && base_shape->get_aabb().has_surface()) {
 			query_bounds = p_convex_transform.xform(base_shape->get_aabb());
-			if (motion_shape != nullptr) {
-				const Vector3 world_motion = p_convex_transform.basis.xform(motion_shape->motion);
+			if (query_motion_shape != nullptr) {
+				const Vector3 world_motion = p_convex_transform.basis.xform(query_motion_shape->motion);
 				query_bounds = query_bounds.merge(AABB(query_bounds.position + world_motion, query_bounds.size));
 			}
 		}
@@ -422,8 +474,7 @@ bool _distance_motion_voxel_to_voxel(
 			Vector3 point_target;
 			const bool separated = gjk_epa_calculate_distance(
 					&moving_voxel, moving_transform,
-					&target_box, _solid_voxel_transform(
-							p_target_transform, _index_to_voxel(target_index, target_dimensions), target_voxel_size),
+					&target_box, _solid_voxel_transform(p_target_transform, _index_to_voxel(target_index, target_dimensions), target_voxel_size),
 					point_motion, point_target);
 			if (!separated) {
 				r_point_motion = point_motion;
@@ -478,8 +529,7 @@ bool _distance_motion_voxel_to_convex(
 		Vector3 point_motion;
 		Vector3 point_convex;
 		const bool separated = gjk_epa_calculate_distance(
-				&moving_voxel, _solid_voxel_transform(
-						p_motion_transform, _index_to_voxel(index, dimensions), voxel_size),
+				&moving_voxel, _solid_voxel_transform(p_motion_transform, _index_to_voxel(index, dimensions), voxel_size),
 				p_convex_shape, p_convex_transform,
 				point_motion, point_convex);
 		if (!separated) {
@@ -510,9 +560,12 @@ bool _find_nearest_solid_exit(
 		Vector3 &r_surface_world,
 		Vector3 &r_normal_world) {
 	static const Vector3i directions[6] = {
-		Vector3i(-1, 0, 0), Vector3i(1, 0, 0),
-		Vector3i(0, -1, 0), Vector3i(0, 1, 0),
-		Vector3i(0, 0, -1), Vector3i(0, 0, 1),
+		Vector3i(-1, 0, 0),
+		Vector3i(1, 0, 0),
+		Vector3i(0, -1, 0),
+		Vector3i(0, 1, 0),
+		Vector3i(0, 0, -1),
+		Vector3i(0, 0, 1),
 	};
 	const Vector3i dimensions = p_solid_data->get_dimensions();
 	const real_t voxel_size = p_solid_data->get_voxel_size();
@@ -557,9 +610,7 @@ bool _find_nearest_solid_exit(
 			}
 			best_distance_squared = distance_squared;
 			r_surface_world = surface_world;
-			r_normal_world = !to_surface.is_zero_approx() ?
-					to_surface.normalized() :
-					p_solid_transform.basis.xform(Vector3(direction)).normalized();
+			r_normal_world = !to_surface.is_zero_approx() ? to_surface.normalized() : p_solid_transform.basis.xform(Vector3(direction)).normalized();
 		}
 	}
 
@@ -593,8 +644,8 @@ bool _test_sphere_against_solid(
 		}
 		from_solid /= distance;
 	} else if (!_find_nearest_solid_exit(
-				p_solid_data, p_solid_transform, p_solid_voxel, center_local,
-				closest_world, from_solid)) {
+					   p_solid_data, p_solid_transform, p_solid_voxel, center_local,
+					   closest_world, from_solid)) {
 		return false;
 	}
 
@@ -631,8 +682,7 @@ bool _test_features_against_solids(
 	const Vector3i solid_dimensions = solid_data->get_dimensions();
 	const real_t feature_voxel_size = feature_data->get_voxel_size();
 	const real_t solid_voxel_size = solid_data->get_voxel_size();
-	const AABB solid_world_bounds = p_solid_transform.xform(AABB(Vector3(), Vector3(solid_dimensions) * solid_voxel_size)).grow(
-			feature_voxel_size + p_feature_margin + p_solid_margin);
+	const AABB solid_world_bounds = p_solid_transform.xform(AABB(Vector3(), Vector3(solid_dimensions) * solid_voxel_size)).grow(feature_voxel_size + p_feature_margin + p_solid_margin);
 	Vector3i feature_lo;
 	Vector3i feature_hi;
 	if (!_voxel_range_from_world_aabb(feature_data, p_feature_transform, solid_world_bounds, feature_lo, feature_hi)) {
@@ -656,8 +706,7 @@ bool _test_features_against_solids(
 
 	for (const int feature_index : feature_indices) {
 		const Vector3i feature_voxel = _index_to_voxel(feature_index, feature_dimensions);
-		const uint8_t feature_mask = p_feature_type == VoxelFeatureType::EDGE ?
-				feature_data->get_edge_mask(feature_voxel) : feature_data->get_corner_mask(feature_voxel);
+		const uint8_t feature_mask = p_feature_type == VoxelFeatureType::EDGE ? feature_data->get_edge_mask(feature_voxel) : feature_data->get_corner_mask(feature_voxel);
 		const VoxelFeatureProxy3D &proxy = p_feature_shape->get_feature_proxy(
 				p_feature_type, feature_mask);
 		if (!proxy.is_valid()) {
@@ -696,15 +745,12 @@ bool _test_features_against_solids(
 						continue;
 					}
 
-					const uint64_t key = p_swap ?
-							_voxel_pair_key(solid_index, feature_index) :
-							_voxel_pair_key(feature_index, solid_index);
+					const uint64_t key = p_swap ? _voxel_pair_key(solid_index, feature_index) : _voxel_pair_key(feature_index, solid_index);
 					if (r_seen.has(key)) {
 						continue;
 					}
 
-					const Transform3D solid_world_transform = p_solid_transform * Transform3D(
-							Basis(), (Vector3(solid_voxel) + Vector3(0.5, 0.5, 0.5)) * solid_voxel_size);
+					const Transform3D solid_world_transform = p_solid_transform * Transform3D(Basis(), (Vector3(solid_voxel) + Vector3(0.5, 0.5, 0.5)) * solid_voxel_size);
 					VoxelCallbackContext context;
 					context.candidates = &r_candidates;
 					context.swap = p_swap;
@@ -766,8 +812,7 @@ bool _test_edges_against_edges(
 		return false;
 	}
 
-	const AABB shape_b_world_bounds = p_transform_b.xform(AABB(Vector3(), Vector3(dimensions_b) * voxel_size_b)).grow(
-			voxel_size_a + p_margin_a + p_margin_b);
+	const AABB shape_b_world_bounds = p_transform_b.xform(AABB(Vector3(), Vector3(dimensions_b) * voxel_size_b)).grow(voxel_size_a + p_margin_a + p_margin_b);
 	Vector3i edge_lo_a;
 	Vector3i edge_hi_a;
 	if (!_voxel_range_from_world_aabb(data_a, p_transform_a, shape_b_world_bounds, edge_lo_a, edge_hi_a)) {
@@ -1002,10 +1047,7 @@ void _emit_manifold(
 				}
 			}
 
-			if (best < 0 || _candidate_is_better(
-						p_candidates[i], spread,
-						p_candidates[best], best_spread,
-						selected_count == 0)) {
+			if (best < 0 || _candidate_is_better(p_candidates[i], spread, p_candidates[best], best_spread, selected_count == 0)) {
 				best = i;
 				best_spread = spread;
 			}
@@ -1084,6 +1126,7 @@ bool GodotVoxelCollisionSolver3D::solve_voxel_convex(
 			context.swap = !p_voxel_is_a;
 			context.feature_index = voxel_index;
 			context.candidate_limit = candidate_limit;
+			context.stop_at_limit = false;
 			context.other_index = -1;
 			sat_calculate_penetration(
 					&voxel_box, _solid_voxel_transform(p_voxel_transform, voxel, voxel_size),

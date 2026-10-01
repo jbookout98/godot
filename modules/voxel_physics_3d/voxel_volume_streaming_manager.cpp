@@ -2,6 +2,7 @@
 
 #include "core/object/callable_mp.h"
 #include "core/config/project_settings.h"
+#include "core/math/vector4.h"
 #include "scene/3d/camera_3d.h"
 #include "scene/main/scene_tree.h"
 #include "scene/main/viewport.h"
@@ -28,6 +29,49 @@ static constexpr const char *VOXEL_FORWARD_INDIRECT_RESOLUTION_NAME = "voxel_for
 static constexpr const char *VOXEL_FORWARD_INDIRECT_TRANSITION_CELLS_NAME = "voxel_forward_indirect_transition_cells";
 static constexpr const char *VOXEL_FORWARD_INDIRECT_INTENSITY_NAME = "voxel_forward_indirect_intensity";
 static constexpr const char *VOXEL_FORWARD_INDIRECT_READY_NAME = "voxel_forward_indirect_ready";
+static constexpr const char *VOXEL_FORWARD_INDIRECT_BACKEND_NAME = "voxel_forward_indirect_backend";
+static constexpr const char *VOXEL_FORWARD_INDIRECT_DEBUG_MODE_NAME = "voxel_forward_indirect_debug_mode";
+static constexpr const char *VOXEL_FORWARD_RESTIR_GI_NAME = "voxel_forward_restir_gi";
+static constexpr const char *VOXEL_FORWARD_RESTIR_READY_NAME = "voxel_forward_restir_ready";
+static constexpr const char *VOXEL_FORWARD_CORNER_AO_STRENGTH_NAME = "voxel_forward_corner_ao_strength";
+static constexpr const char *VOXEL_FORWARD_CORNER_AO_TINT_NAME = "voxel_forward_corner_ao_tint";
+static constexpr const char *VOXEL_FORWARD_INDIRECT_DIRTY_MIN_NAMES[3] = { "voxel_forward_indirect_dirty_min0", "voxel_forward_indirect_dirty_min1", "voxel_forward_indirect_dirty_min2" };
+static constexpr const char *VOXEL_FORWARD_INDIRECT_DIRTY_MAX_NAMES[3] = { "voxel_forward_indirect_dirty_max0", "voxel_forward_indirect_dirty_max1", "voxel_forward_indirect_dirty_max2" };
+static constexpr const char *VOXEL_FORWARD_INDIRECT_STAGING_MASK_NAME = "voxel_forward_indirect_staging_mask";
+static constexpr const char *VOXEL_FORWARD_INDIRECT_ACTIVE_REVISIONS_NAME = "voxel_forward_indirect_active_revisions";
+static constexpr const char *VOXEL_FORWARD_INDIRECT_STAGING_REVISIONS_NAME = "voxel_forward_indirect_staging_revisions";
+static constexpr const char *VOXEL_FORWARD_INDIRECT_UPDATE_METRICS_NAME = "voxel_forward_indirect_update_metrics";
+static constexpr const char *VOXEL_FORWARD_INDIRECT_TOPOLOGY_EDIT_NAME = "voxel_forward_indirect_topology_edit";
+static constexpr const char *VOXEL_FORWARD_DDGI_IRRADIANCE_NAMES[4] = { "voxel_forward_ddgi_irradiance_lod0", "voxel_forward_ddgi_irradiance_lod1", "voxel_forward_ddgi_irradiance_lod2", "voxel_forward_ddgi_irradiance_lod3" };
+static constexpr const char *VOXEL_FORWARD_DDGI_DEPTH_NAMES[4] = { "voxel_forward_ddgi_depth_lod0", "voxel_forward_ddgi_depth_lod1", "voxel_forward_ddgi_depth_lod2", "voxel_forward_ddgi_depth_lod3" };
+static constexpr const char *VOXEL_FORWARD_DDGI_METADATA_NAMES[4] = { "voxel_forward_ddgi_metadata_lod0", "voxel_forward_ddgi_metadata_lod1", "voxel_forward_ddgi_metadata_lod2", "voxel_forward_ddgi_metadata_lod3" };
+static constexpr const char *VOXEL_FORWARD_DDGI_ORIGIN_NAMES[4] = { "voxel_forward_ddgi_origin_lod0", "voxel_forward_ddgi_origin_lod1", "voxel_forward_ddgi_origin_lod2", "voxel_forward_ddgi_origin_lod3" };
+static constexpr const char *VOXEL_FORWARD_DDGI_CELL_SIZE_NAMES[4] = { "voxel_forward_ddgi_cell_size_lod0", "voxel_forward_ddgi_cell_size_lod1", "voxel_forward_ddgi_cell_size_lod2", "voxel_forward_ddgi_cell_size_lod3" };
+static constexpr const char *VOXEL_FORWARD_DDGI_PHASE_NAMES[4] = { "voxel_forward_ddgi_phase_lod0", "voxel_forward_ddgi_phase_lod1", "voxel_forward_ddgi_phase_lod2", "voxel_forward_ddgi_phase_lod3" };
+static constexpr const char *VOXEL_FORWARD_DDGI_LOGICAL_ORIGIN_NAMES[4] = { "voxel_forward_ddgi_logical_origin_lod0", "voxel_forward_ddgi_logical_origin_lod1", "voxel_forward_ddgi_logical_origin_lod2", "voxel_forward_ddgi_logical_origin_lod3" };
+static constexpr const char *VOXEL_FORWARD_DDGI_PROBE_RESOLUTION_NAME = "voxel_forward_ddgi_probe_resolution";
+static constexpr const char *VOXEL_FORWARD_DDGI_IRRADIANCE_ATLAS_SIZE_NAME = "voxel_forward_ddgi_irradiance_atlas_size";
+static constexpr const char *VOXEL_FORWARD_DDGI_VISIBILITY_ATLAS_SIZE_NAME = "voxel_forward_ddgi_visibility_atlas_size";
+static constexpr const char *VOXEL_FORWARD_DDGI_SELF_SHADOW_BIAS_NAME = "voxel_forward_ddgi_self_shadow_bias";
+static constexpr const char *VOXEL_FORWARD_DDGI_VIEW_BIAS_NAME = "voxel_forward_ddgi_view_bias";
+static constexpr const char *VOXEL_FORWARD_DDGI_LOD_TRANSITION_NAME = "voxel_forward_ddgi_lod_transition";
+static constexpr const char *VOXEL_FORWARD_DDGI_CAMERA_POSITION_NAME = "voxel_forward_ddgi_camera_position";
+static constexpr const char *VOXEL_FORWARD_DDGI_READY_NAME = "voxel_forward_ddgi_ready";
+static constexpr const char *VOXEL_FORWARD_DDGI_RESOLVE_NAME = "voxel_forward_ddgi_resolve";
+static constexpr const char *VOXEL_FORWARD_DDGI_RESOLVE_READY_NAME = "voxel_forward_ddgi_resolve_ready";
+static constexpr const char *VOXEL_FORWARD_DDGI_DEBUG_MODE_NAME = "voxel_forward_ddgi_debug_mode";
+static constexpr const char *VOXEL_FORWARD_DDGI_SHADOW_FILL_STRENGTH_NAME = "voxel_forward_ddgi_shadow_fill_strength";
+static constexpr const char *VOXEL_FORWARD_DDGI_SHADOW_FILL_TINT_NAME = "voxel_forward_ddgi_shadow_fill_tint";
+static constexpr const char *VOXEL_FORWARD_DDGI_SHADOW_FILL_REACH_NAME = "voxel_forward_ddgi_shadow_fill_reach";
+static constexpr const char *VOXEL_FORWARD_DDGI_COLOR_SATURATION_NAME = "voxel_forward_ddgi_color_saturation";
+static constexpr const char *VOXEL_FORWARD_TOON_ENABLED_NAME = "voxel_forward_toon_enabled";
+static constexpr const char *VOXEL_FORWARD_DDGI_TOON_BAND_COUNT_NAME = "voxel_forward_ddgi_toon_band_count";
+static constexpr const char *VOXEL_FORWARD_DDGI_TOON_BAND_SOFTNESS_NAME = "voxel_forward_ddgi_toon_band_softness";
+static constexpr const char *VOXEL_FORWARD_DDGI_TOON_BAND_RANGE_NAME = "voxel_forward_ddgi_toon_band_range";
+static constexpr const char *VOXEL_FORWARD_TOON_SPECULAR_ENABLED_NAME = "voxel_forward_toon_specular_enabled";
+static constexpr const char *VOXEL_FORWARD_TOON_SPECULAR_THRESHOLD_NAME = "voxel_forward_toon_specular_threshold";
+static constexpr const char *VOXEL_FORWARD_TOON_SPECULAR_SOFTNESS_NAME = "voxel_forward_toon_specular_softness";
+static constexpr const char *VOXEL_FORWARD_TOON_SPECULAR_STRENGTH_NAME = "voxel_forward_toon_specular_strength";
 static constexpr const char *VOXEL_FORWARD_AMBIENT_COLOR_NAME = "voxel_forward_ambient_color";
 static constexpr const char *VOXEL_FORWARD_AMBIENT_ENERGY_NAME = "voxel_forward_ambient_energy";
 static constexpr const char *VOXEL_FORWARD_REFLECTION_NAME = "voxel_forward_reflection";
@@ -284,9 +328,15 @@ static void _find_neighbor_diagonals(VoxelVolume3D *p_target, const VoxelNeighbo
 	}
 }
 
+struct VoxelNeighborIndexCache {
+	VoxelNeighborFaceIndex faces;
+	VoxelNeighborDiagonalIndex diagonals;
+};
+
 VoxelVolumeStreamingManager::VoxelVolumeStreamingManager() {
 	ERR_FAIL_COND(singleton != nullptr);
 	singleton = this;
+	neighbor_index_cache = memnew(VoxelNeighborIndexCache);
 	_register_voxel_forward_globals();
 }
 
@@ -294,6 +344,7 @@ VoxelVolumeStreamingManager::~VoxelVolumeStreamingManager() {
 	// SceneTree removes Object callables during teardown. At this initialization
 	// level its signals may already be gone, so querying them here is invalid.
 	connected_tree = nullptr;
+	memdelete(neighbor_index_cache);
 	if (singleton == this) {
 		singleton = nullptr;
 	}
@@ -315,6 +366,7 @@ void VoxelVolumeStreamingManager::_connect_tree(SceneTree *p_tree) {
 void VoxelVolumeStreamingManager::register_volume(VoxelVolume3D *p_volume) {
 	ERR_FAIL_NULL(p_volume);
 	volumes.insert(p_volume->get_instance_id());
+	streaming_evaluated = false;
 	neighbors_dirty = true;
 	_connect_tree(p_volume->get_tree());
 }
@@ -322,6 +374,7 @@ void VoxelVolumeStreamingManager::register_volume(VoxelVolume3D *p_volume) {
 void VoxelVolumeStreamingManager::unregister_volume(VoxelVolume3D *p_volume) {
 	if (p_volume != nullptr) {
 		volumes.erase(p_volume->get_instance_id());
+		streaming_evaluated = false;
 		neighbors_dirty = true;
 	}
 }
@@ -329,17 +382,22 @@ void VoxelVolumeStreamingManager::unregister_volume(VoxelVolume3D *p_volume) {
 void VoxelVolumeStreamingManager::_process_frame() {
 	// Residency does not need per-frame precision. This amortizes ranking costs
 	// even with hundreds of 100^3 volumes.
-	if (streaming_pending || ++frame_counter >= 12) {
+	if (!streaming_evaluated || streaming_pending || ++frame_counter >= 12) {
 		frame_counter = 0;
 		_update_streaming();
 	}
 	// Loading a large resident set is deliberately spread over several frames.
 	// Rebuilding all adjacency and occupancy data after every small batch would
 	// turn that amortization back into a startup stall.
-	if (!streaming_pending && (neighbors_dirty || !neighbor_rebuild_queue.is_empty())) {
-		_update_neighbors();
-	} else if (!streaming_pending && !neighbor_refresh_volumes.is_empty()) {
-		_update_dirty_neighbors();
+	if (!streaming_pending) {
+		// Boundary edits must not wait behind a topology pass which animated
+		// volumes can invalidate every frame.
+		if (!neighbor_refresh_volumes.is_empty()) {
+			_update_dirty_neighbors();
+		}
+		if (neighbors_dirty || !neighbor_rebuild_queue.is_empty()) {
+			_update_neighbors();
+		}
 	}
 }
 
@@ -354,6 +412,8 @@ void VoxelVolumeStreamingManager::_register_voxel_forward_globals() {
 	slices.push_back(Image::create_from_data(1, 1, false, Image::FORMAT_L8, empty));
 	voxel_forward_fallback_texture.instantiate();
 	ERR_FAIL_COND(voxel_forward_fallback_texture->create(Image::FORMAT_L8, 1, 1, 1, false, slices) != OK);
+	voxel_forward_fallback_texture_2d = ImageTexture::create_from_image(slices[0]);
+	ERR_FAIL_COND(voxel_forward_fallback_texture_2d.is_null());
 
 	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_SHADOW_MASK_NAME, RSE::GLOBAL_VAR_TYPE_SAMPLER2D, RID());
 	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_SHADOW_LIGHT_DIRECTION_NAME, RSE::GLOBAL_VAR_TYPE_VEC3, Vector3(0, 1, 0));
@@ -371,6 +431,54 @@ void VoxelVolumeStreamingManager::_register_voxel_forward_globals() {
 	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_INDIRECT_TRANSITION_CELLS_NAME, RSE::GLOBAL_VAR_TYPE_FLOAT, 1.0);
 	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_INDIRECT_INTENSITY_NAME, RSE::GLOBAL_VAR_TYPE_FLOAT, 0.0);
 	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_INDIRECT_READY_NAME, RSE::GLOBAL_VAR_TYPE_BOOL, false);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_INDIRECT_BACKEND_NAME, RSE::GLOBAL_VAR_TYPE_INT, 2);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_INDIRECT_DEBUG_MODE_NAME, RSE::GLOBAL_VAR_TYPE_INT, 0);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_CORNER_AO_STRENGTH_NAME, RSE::GLOBAL_VAR_TYPE_FLOAT, 1.0);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_CORNER_AO_TINT_NAME, RSE::GLOBAL_VAR_TYPE_COLOR, Color(0.0, 0.0, 0.0));
+	for (uint32_t cascade = 0; cascade < 3; cascade++) {
+		rendering_server->global_shader_parameter_add(VOXEL_FORWARD_INDIRECT_DIRTY_MIN_NAMES[cascade], RSE::GLOBAL_VAR_TYPE_VEC3, Vector3(1e20, 1e20, 1e20));
+		rendering_server->global_shader_parameter_add(VOXEL_FORWARD_INDIRECT_DIRTY_MAX_NAMES[cascade], RSE::GLOBAL_VAR_TYPE_VEC3, Vector3(-1e20, -1e20, -1e20));
+	}
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_INDIRECT_STAGING_MASK_NAME, RSE::GLOBAL_VAR_TYPE_INT, 0);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_INDIRECT_ACTIVE_REVISIONS_NAME, RSE::GLOBAL_VAR_TYPE_VEC3, Vector3(-1, -1, -1));
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_INDIRECT_STAGING_REVISIONS_NAME, RSE::GLOBAL_VAR_TYPE_VEC3, Vector3(-1, -1, -1));
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_INDIRECT_UPDATE_METRICS_NAME, RSE::GLOBAL_VAR_TYPE_VEC4, Vector4());
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_INDIRECT_TOPOLOGY_EDIT_NAME, RSE::GLOBAL_VAR_TYPE_VEC4, Vector4());
+	const RID fallback_2d = voxel_forward_fallback_texture_2d->get_rid();
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_RESTIR_GI_NAME, RSE::GLOBAL_VAR_TYPE_SAMPLER2D, fallback_2d);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_RESTIR_READY_NAME, RSE::GLOBAL_VAR_TYPE_BOOL, false);
+	for (uint32_t lod = 0; lod < 4; lod++) {
+		rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_IRRADIANCE_NAMES[lod], RSE::GLOBAL_VAR_TYPE_SAMPLER2D, fallback_2d);
+		rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_DEPTH_NAMES[lod], RSE::GLOBAL_VAR_TYPE_SAMPLER2D, fallback_2d);
+		rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_METADATA_NAMES[lod], RSE::GLOBAL_VAR_TYPE_SAMPLER2D, fallback_2d);
+		rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_ORIGIN_NAMES[lod], RSE::GLOBAL_VAR_TYPE_VEC3, Vector3());
+		rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_CELL_SIZE_NAMES[lod], RSE::GLOBAL_VAR_TYPE_VEC3, Vector3(1, 1, 1));
+		rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_PHASE_NAMES[lod], RSE::GLOBAL_VAR_TYPE_IVEC3, Vector3i());
+		rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_LOGICAL_ORIGIN_NAMES[lod], RSE::GLOBAL_VAR_TYPE_IVEC3, Vector3i());
+	}
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_PROBE_RESOLUTION_NAME, RSE::GLOBAL_VAR_TYPE_INT, 1);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_IRRADIANCE_ATLAS_SIZE_NAME, RSE::GLOBAL_VAR_TYPE_VEC2, Vector2(1, 1));
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_VISIBILITY_ATLAS_SIZE_NAME, RSE::GLOBAL_VAR_TYPE_VEC2, Vector2(1, 1));
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_SELF_SHADOW_BIAS_NAME, RSE::GLOBAL_VAR_TYPE_FLOAT, 0.3);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_VIEW_BIAS_NAME, RSE::GLOBAL_VAR_TYPE_FLOAT, 0.0);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_LOD_TRANSITION_NAME, RSE::GLOBAL_VAR_TYPE_FLOAT, 0.15);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_CAMERA_POSITION_NAME, RSE::GLOBAL_VAR_TYPE_VEC3, Vector3());
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_READY_NAME, RSE::GLOBAL_VAR_TYPE_BOOL, false);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_RESOLVE_NAME, RSE::GLOBAL_VAR_TYPE_SAMPLER2D, fallback_2d);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_RESOLVE_READY_NAME, RSE::GLOBAL_VAR_TYPE_BOOL, false);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_DEBUG_MODE_NAME, RSE::GLOBAL_VAR_TYPE_INT, 0);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_SHADOW_FILL_STRENGTH_NAME, RSE::GLOBAL_VAR_TYPE_FLOAT, 0.0);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_SHADOW_FILL_TINT_NAME, RSE::GLOBAL_VAR_TYPE_COLOR, Color(1.0, 1.0, 1.0));
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_SHADOW_FILL_REACH_NAME, RSE::GLOBAL_VAR_TYPE_FLOAT, 0.0);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_COLOR_SATURATION_NAME, RSE::GLOBAL_VAR_TYPE_FLOAT, 1.0);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_TOON_ENABLED_NAME, RSE::GLOBAL_VAR_TYPE_BOOL, false);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_TOON_BAND_COUNT_NAME, RSE::GLOBAL_VAR_TYPE_INT, 0);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_TOON_BAND_SOFTNESS_NAME, RSE::GLOBAL_VAR_TYPE_FLOAT, 0.05);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_DDGI_TOON_BAND_RANGE_NAME, RSE::GLOBAL_VAR_TYPE_FLOAT, 1.0);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_TOON_SPECULAR_ENABLED_NAME, RSE::GLOBAL_VAR_TYPE_BOOL, false);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_TOON_SPECULAR_THRESHOLD_NAME, RSE::GLOBAL_VAR_TYPE_FLOAT, 0.55);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_TOON_SPECULAR_SOFTNESS_NAME, RSE::GLOBAL_VAR_TYPE_FLOAT, 0.04);
+	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_TOON_SPECULAR_STRENGTH_NAME, RSE::GLOBAL_VAR_TYPE_FLOAT, 1.0);
 	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_AMBIENT_COLOR_NAME, RSE::GLOBAL_VAR_TYPE_COLOR, Color(0.22, 0.22, 0.22));
 	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_AMBIENT_ENERGY_NAME, RSE::GLOBAL_VAR_TYPE_FLOAT, 1.0);
 	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_REFLECTION_NAME, RSE::GLOBAL_VAR_TYPE_SAMPLER2D, RID());
@@ -378,6 +486,8 @@ void VoxelVolumeStreamingManager::_register_voxel_forward_globals() {
 	rendering_server->global_shader_parameter_add(VOXEL_FORWARD_REFLECTION_INTENSITY_NAME, RSE::GLOBAL_VAR_TYPE_FLOAT, 1.0);
 }
 void VoxelVolumeStreamingManager::_update_streaming() {
+	streaming_evaluated = true;
+	selected_target_count = 0;
 	const int max_resident = MAX(1, int(GLOBAL_GET("rendering/voxel_volume/max_resident_volumes")));
 	const int configured_loads = CLAMP(int(GLOBAL_GET("rendering/voxel_volume/max_loads_per_frame")), 1, 64);
 	const real_t global_distance = MAX(real_t(0.0), real_t(GLOBAL_GET("rendering/voxel_volume/streaming_distance")));
@@ -398,6 +508,7 @@ void VoxelVolumeStreamingManager::_update_streaming() {
 			continue;
 		}
 		if (volume->get_streaming_mode() == VoxelVolume3D::STREAMING_ALWAYS_RESIDENT) {
+			selected_target_count++;
 			volume->set_streaming_resident(true);
 			continue;
 		}
@@ -432,6 +543,7 @@ void VoxelVolumeStreamingManager::_update_streaming() {
 	for (const ObjectID &id : stale) {
 		volumes.erase(id);
 	}
+	selected_target_count += MIN(max_resident, candidates.size());
 	if (candidates.size() <= max_resident && all_candidates_resident) {
 		return;
 	}
@@ -467,28 +579,38 @@ void VoxelVolumeStreamingManager::_update_neighbors() {
 	// large streamed scene for more than a second. Reuse the residency budget so
 	// adjacency finalization has the same bounded per-frame cost as volume loads.
 	const int update_budget = CLAMP(int(GLOBAL_GET("rendering/voxel_volume/max_loads_per_frame")), 1, 64);
-	Vector<ObjectID> stale;
-	Vector<VoxelVolume3D *> live_volumes;
-	for (const ObjectID &id : volumes) {
-		VoxelVolume3D *volume = Object::cast_to<VoxelVolume3D>(ObjectDB::get_instance(id));
-		if (volume == nullptr) {
-			stale.push_back(id);
-			continue;
-		}
-		if (volume->is_streaming_resident()) {
-			live_volumes.push_back(volume);
-		}
-	}
-	for (const ObjectID &id : stale) {
-		volumes.erase(id);
-	}
 	if (neighbors_dirty) {
+		Vector<ObjectID> stale;
+		Vector<VoxelVolume3D *> live_volumes;
+		for (const ObjectID &id : volumes) {
+			VoxelVolume3D *volume = Object::cast_to<VoxelVolume3D>(ObjectDB::get_instance(id));
+			if (volume == nullptr) {
+				stale.push_back(id);
+				continue;
+			}
+			if (volume->is_streaming_resident()) {
+				live_volumes.push_back(volume);
+			}
+		}
+		for (const ObjectID &id : stale) {
+			volumes.erase(id);
+		}
+		neighbor_index_cache->faces.clear();
+		neighbor_index_cache->diagonals.clear();
+		_build_neighbor_face_index(live_volumes, neighbor_index_cache->faces);
+		_build_neighbor_diagonal_index(live_volumes, neighbor_index_cache->diagonals);
 		neighbors_dirty = false;
-		neighbor_refresh_volumes.clear();
-		neighbor_rebuild_queue.clear();
-		neighbor_rebuild_index = 0;
-		for (VoxelVolume3D *volume : live_volumes) {
-			neighbor_rebuild_queue.push_back(volume->get_instance_id());
+		if (neighbor_rebuild_queue.is_empty()) {
+			neighbor_rebuild_index = 0;
+			for (VoxelVolume3D *volume : live_volumes) {
+				neighbor_rebuild_queue.push_back(volume->get_instance_id());
+			}
+		} else {
+			// Keep making progress with the current topology index. Restarting at
+			// zero on each animation tick starves everything after the first batch.
+			// A subsequent pass also revisits volumes processed before this change
+			// and includes any newly registered volumes.
+			neighbor_rebuild_rescan = true;
 		}
 	}
 	if (neighbor_rebuild_index >= neighbor_rebuild_queue.size()) {
@@ -496,10 +618,8 @@ void VoxelVolumeStreamingManager::_update_neighbors() {
 		neighbor_rebuild_index = 0;
 		return;
 	}
-	VoxelNeighborFaceIndex face_index;
-	_build_neighbor_face_index(live_volumes, face_index);
-	VoxelNeighborDiagonalIndex diagonal_index;
-	_build_neighbor_diagonal_index(live_volumes, diagonal_index);
+	// Registration, removal, movement and residency changes invalidate this cache
+	// before it is used again. Stable batches reuse the same lookup tables.
 
 	int updated = 0;
 	while (neighbor_rebuild_index < neighbor_rebuild_queue.size() && updated < update_budget) {
@@ -509,68 +629,51 @@ void VoxelVolumeStreamingManager::_update_neighbors() {
 		}
 		VoxelVolume3D *faces[VoxelVolume3D::NEIGHBOR_FACE_COUNT] = {};
 		VoxelVolume3D *diagonals[VoxelVolume3D::NEIGHBOR_DIAGONAL_COUNT] = {};
-		_find_neighbor_faces(target, face_index, faces);
-		_find_neighbor_diagonals(target, diagonal_index, diagonals);
+		_find_neighbor_faces(target, neighbor_index_cache->faces, faces);
+		_find_neighbor_diagonals(target, neighbor_index_cache->diagonals, diagonals);
 		target->update_neighbor_faces(faces, diagonals);
 		updated++;
 	}
 	if (neighbor_rebuild_index >= neighbor_rebuild_queue.size()) {
 		neighbor_rebuild_queue.clear();
 		neighbor_rebuild_index = 0;
+		neighbors_dirty = neighbors_dirty || neighbor_rebuild_rescan;
+		neighbor_rebuild_rescan = false;
 	}
 }
 
 void VoxelVolumeStreamingManager::mark_volume_neighbors_dirty(VoxelVolume3D *p_volume) {
 	if (p_volume != nullptr) {
 		neighbor_refresh_volumes.insert(p_volume->get_instance_id());
+		streaming_evaluated = false;
 	}
 }
 
 void VoxelVolumeStreamingManager::_update_dirty_neighbors() {
-	HashSet<ObjectID> affected(neighbor_refresh_volumes);
+	HashSet<ObjectID> requested(neighbor_refresh_volumes);
 	neighbor_refresh_volumes.clear();
-	Vector<VoxelVolume3D *> live_volumes;
-	Vector<ObjectID> stale;
-	for (const ObjectID &id : volumes) {
-		VoxelVolume3D *volume = Object::cast_to<VoxelVolume3D>(ObjectDB::get_instance(id));
-		if (volume == nullptr) {
-			stale.push_back(id);
-		} else {
-			live_volumes.push_back(volume);
-		}
-	}
-	for (const ObjectID &id : stale) {
-		volumes.erase(id);
-	}
-	VoxelNeighborFaceIndex face_index;
-	_build_neighbor_face_index(live_volumes, face_index);
-	VoxelNeighborDiagonalIndex diagonal_index;
-	_build_neighbor_diagonal_index(live_volumes, diagonal_index);
+	HashSet<ObjectID> affected;
 
-	// A boundary edit can change AO on any touching face, edge, or corner.
-	// Expand only to those immediate neighbors.
-	Vector<ObjectID> requested;
-	for (const ObjectID &id : affected) {
-		requested.push_back(id);
-	}
+	// Voxel edits do not change volume placement, so the adjacency discovered by
+	// the last streaming/topology rebuild is still valid. Rebuilding both spatial
+	// indexes here made a one-cell boundary edit scale with every resident volume.
+	// Refresh only the edited volumes and their already-known touching neighbors.
 	for (const ObjectID &id : requested) {
 		VoxelVolume3D *edited = Object::cast_to<VoxelVolume3D>(ObjectDB::get_instance(id));
 		if (edited == nullptr) {
 			continue;
 		}
-		VoxelVolume3D *faces[VoxelVolume3D::NEIGHBOR_FACE_COUNT] = {};
-		VoxelVolume3D *diagonals[VoxelVolume3D::NEIGHBOR_DIAGONAL_COUNT] = {};
-		_find_neighbor_faces(edited, face_index, faces);
-		_find_neighbor_diagonals(edited, diagonal_index, diagonals);
-		for (VoxelVolume3D *neighbor : faces) {
-			if (neighbor != nullptr) {
-				affected.insert(neighbor->get_instance_id());
-			}
+		Vector<ObjectID> cached_neighbors;
+		edited->append_cached_neighbor_ids(cached_neighbors);
+		// Newly resident or isolated volumes have no cached shared boundaries.
+		// Their first adjacency pass handles discovery; do not duplicate that
+		// work for the entire initial load here.
+		if (cached_neighbors.is_empty()) {
+			continue;
 		}
-		for (VoxelVolume3D *neighbor : diagonals) {
-			if (neighbor != nullptr) {
-				affected.insert(neighbor->get_instance_id());
-			}
+		affected.insert(id);
+		for (const ObjectID &neighbor_id : cached_neighbors) {
+			affected.insert(neighbor_id);
 		}
 	}
 
@@ -579,10 +682,25 @@ void VoxelVolumeStreamingManager::_update_dirty_neighbors() {
 		if (target == nullptr) {
 			continue;
 		}
-		VoxelVolume3D *faces[VoxelVolume3D::NEIGHBOR_FACE_COUNT] = {};
-		VoxelVolume3D *diagonals[VoxelVolume3D::NEIGHBOR_DIAGONAL_COUNT] = {};
-		_find_neighbor_faces(target, face_index, faces);
-		_find_neighbor_diagonals(target, diagonal_index, diagonals);
-		target->update_neighbor_faces(faces, diagonals);
+		target->refresh_cached_neighbor_faces();
 	}
+}
+
+
+// Preparation/submission status. Callers must observe a rendered frame before
+// revealing the world; this is not a GPU fence or a GI-convergence metric.
+Dictionary VoxelVolumeStreamingManager::get_streaming_status() const {
+	int resident = 0;
+	for (const ObjectID &id : volumes) {
+		const VoxelVolume3D *volume = Object::cast_to<VoxelVolume3D>(ObjectDB::get_instance(id));
+		if (volume && volume->get_streaming_mode() != VoxelVolume3D::STREAMING_MANUAL && volume->is_streaming_resident()) {
+			resident++;
+		}
+	}
+	Dictionary result;
+	result["resident"] = resident;
+	result["target"] = selected_target_count;
+	result["pending_neighbors"] = neighbor_rebuild_queue.size() - neighbor_rebuild_index;
+	result["ready"] = streaming_evaluated && !streaming_pending && !neighbors_dirty && neighbor_rebuild_queue.is_empty() && neighbor_refresh_volumes.is_empty();
+	return result;
 }
