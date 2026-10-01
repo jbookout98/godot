@@ -6,10 +6,7 @@ def can_build(env, platform):
     # retains its internal Godot* class names. Building both modules would
     # define the same C++ symbols twice.
     if env.get("module_godot_physics_3d_enabled", False):
-        print(
-            "VoxelPhysics3D disabled: build with "
-            "module_godot_physics_3d_enabled=no."
-        )
+        print("VoxelPhysics3D disabled: build with module_godot_physics_3d_enabled=no.")
         return False
 
     return True

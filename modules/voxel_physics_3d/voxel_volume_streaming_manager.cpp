@@ -1,15 +1,45 @@
+/**************************************************************************/
+/*  voxel_volume_streaming_manager.cpp                                    */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
+
 #include "voxel_volume_streaming_manager.h"
 
-#include "core/object/callable_mp.h"
+#include "voxel_volume_3d.h"
+
 #include "core/config/project_settings.h"
 #include "core/math/vector4.h"
+#include "core/object/callable_mp.h"
+#include "core/templates/hash_map.h"
 #include "scene/3d/camera_3d.h"
 #include "scene/main/scene_tree.h"
 #include "scene/main/viewport.h"
 #include "servers/rendering/rendering_server.h"
-#include "voxel_volume_3d.h"
-
-#include "core/templates/hash_map.h"
 
 VoxelVolumeStreamingManager *VoxelVolumeStreamingManager::singleton = nullptr;
 
@@ -156,12 +186,24 @@ static Vector3 _get_neighbor_face_center(const VoxelVolume3D *p_volume, int p_fa
 	const Vector3 size = Vector3(data->get_dimensions()) * data->get_voxel_size();
 	Vector3 center = size * real_t(0.5);
 	switch (p_face) {
-		case VoxelVolume3D::NEIGHBOR_NEGATIVE_X: center.x = 0.0; break;
-		case VoxelVolume3D::NEIGHBOR_POSITIVE_X: center.x = size.x; break;
-		case VoxelVolume3D::NEIGHBOR_NEGATIVE_Y: center.y = 0.0; break;
-		case VoxelVolume3D::NEIGHBOR_POSITIVE_Y: center.y = size.y; break;
-		case VoxelVolume3D::NEIGHBOR_NEGATIVE_Z: center.z = 0.0; break;
-		case VoxelVolume3D::NEIGHBOR_POSITIVE_Z: center.z = size.z; break;
+		case VoxelVolume3D::NEIGHBOR_NEGATIVE_X:
+			center.x = 0.0;
+			break;
+		case VoxelVolume3D::NEIGHBOR_POSITIVE_X:
+			center.x = size.x;
+			break;
+		case VoxelVolume3D::NEIGHBOR_NEGATIVE_Y:
+			center.y = 0.0;
+			break;
+		case VoxelVolume3D::NEIGHBOR_POSITIVE_Y:
+			center.y = size.y;
+			break;
+		case VoxelVolume3D::NEIGHBOR_NEGATIVE_Z:
+			center.z = 0.0;
+			break;
+		case VoxelVolume3D::NEIGHBOR_POSITIVE_Z:
+			center.z = size.z;
+			break;
 	}
 	return p_volume->get_global_transform().xform(center);
 }
@@ -243,9 +285,15 @@ static int _get_neighbor_diagonal(const VoxelVolume3D *p_volume, const VoxelVolu
 	const real_t tolerance = MAX(real_t(0.00001), data->get_voxel_size() * real_t(0.001));
 	auto near_value = [tolerance](real_t p_a, real_t p_b) { return Math::abs(p_a - p_b) <= tolerance; };
 	auto get_axis_offset = [&near_value](real_t p_origin, real_t p_size, real_t p_other_size, int p_dimension, int p_other_dimension) {
-		if (near_value(p_origin, -p_other_size)) return -1;
-		if (near_value(p_origin, p_size)) return 1;
-		if (near_value(p_origin, 0.0) && p_dimension == p_other_dimension) return 0;
+		if (near_value(p_origin, -p_other_size)) {
+			return -1;
+		}
+		if (near_value(p_origin, p_size)) {
+			return 1;
+		}
+		if (near_value(p_origin, 0.0) && p_dimension == p_other_dimension) {
+			return 0;
+		}
 		return 2;
 	};
 	const Vector3i offset(
@@ -273,12 +321,21 @@ static Vector3 _get_neighbor_diagonal_center(const VoxelVolume3D *p_volume, int 
 	const Vector3 size = Vector3(data->get_dimensions()) * data->get_voxel_size();
 	const Vector3i offset = VoxelVolume3D::get_neighbor_diagonal_offset(p_diagonal);
 	Vector3 center = size * real_t(0.5);
-	if (offset.x < 0) center.x = 0.0;
-	else if (offset.x > 0) center.x = size.x;
-	if (offset.y < 0) center.y = 0.0;
-	else if (offset.y > 0) center.y = size.y;
-	if (offset.z < 0) center.z = 0.0;
-	else if (offset.z > 0) center.z = size.z;
+	if (offset.x < 0) {
+		center.x = 0.0;
+	} else if (offset.x > 0) {
+		center.x = size.x;
+	}
+	if (offset.y < 0) {
+		center.y = 0.0;
+	} else if (offset.y > 0) {
+		center.y = size.y;
+	}
+	if (offset.z < 0) {
+		center.z = 0.0;
+	} else if (offset.z > 0) {
+		center.z = size.z;
+	}
 	return p_volume->get_global_transform().xform(center);
 }
 
@@ -685,7 +742,6 @@ void VoxelVolumeStreamingManager::_update_dirty_neighbors() {
 		target->refresh_cached_neighbor_faces();
 	}
 }
-
 
 // Preparation/submission status. Callers must observe a rendered frame before
 // revealing the world; this is not a GPU fence or a GI-convergence metric.

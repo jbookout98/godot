@@ -31,9 +31,9 @@ params;
 
 const int DIRECTION_COUNT = 6;
 const ivec3 DIRECTION_OFFSETS[6] = ivec3[6](
-	ivec3(1, 0, 0), ivec3(-1, 0, 0),
-	ivec3(0, 1, 0), ivec3(0, -1, 0),
-	ivec3(0, 0, 1), ivec3(0, 0, -1));
+		ivec3(1, 0, 0), ivec3(-1, 0, 0),
+		ivec3(0, 1, 0), ivec3(0, -1, 0),
+		ivec3(0, 0, 1), ivec3(0, 0, -1));
 
 ivec3 directional_texel(ivec3 cell, int direction, int resolution) {
 	return ivec3(cell.x + direction * resolution, cell.y, cell.z);
@@ -113,7 +113,9 @@ void main() {
 			axial_transport = texelFetch(source_grid, directional_texel(axial_neighbor, lobe, resolution), 0).rgb;
 			int opposite_lobe = lobe ^ 1;
 			for (int source_lobe = 0; source_lobe < DIRECTION_COUNT; source_lobe++) {
-				if (source_lobe == lobe || source_lobe == opposite_lobe) continue;
+				if (source_lobe == lobe || source_lobe == opposite_lobe) {
+					continue;
+				}
 				vec3 turned = texelFetch(source_grid, directional_texel(axial_neighbor, source_lobe, resolution), 0).rgb;
 				axial_transport = max(axial_transport, turned);
 			}

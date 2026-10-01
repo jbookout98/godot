@@ -30,22 +30,23 @@
 
 #include "register_types.h"
 
-#include "core/object/callable_mp.h"
-#include "core/object/class_db.h"
 #include "godot_physics_server_3d.h"
+#include "voxel_lighting_bake_3d.h"
+#include "voxel_material.h"
 #include "voxel_shape_3d.h"
 #include "voxel_shape_data.h"
-#include "voxel_material.h"
 #include "voxel_volume_3d.h"
-#include "voxel_lighting_bake_3d.h"
 #include "voxel_volume_streaming_manager.h"
+
 #include "core/config/project_settings.h"
+#include "core/object/callable_mp.h"
+#include "core/object/class_db.h"
 #include "servers/physics_3d/physics_server_3d.h"
 #include "servers/physics_3d/physics_server_3d_wrap_mt.h"
 
 #ifdef TOOLS_ENABLED
-#include "editor/voxel_volume_3d_editor_plugin.h"
 #include "editor/voxel_lighting_bake_editor_plugin.h"
+#include "editor/voxel_volume_3d_editor_plugin.h"
 #endif
 
 static PhysicsServer3D *_create_voxel_physics_3d_callback() {
@@ -346,10 +347,10 @@ void initialize_voxel_physics_3d_module(ModuleInitializationLevel p_level) {
 		ClassDB::register_class<VoxelVolume3D>();
 		ClassDB::register_class<VoxelLightingData>();
 		ClassDB::register_class<VoxelLightingBake3D>();
-  voxel_lighting_loader.instantiate();
-  voxel_lighting_saver.instantiate();
-  ResourceLoader::add_resource_format_loader(voxel_lighting_loader);
-  ResourceSaver::add_resource_format_saver(voxel_lighting_saver);
+		voxel_lighting_loader.instantiate();
+		voxel_lighting_saver.instantiate();
+		ResourceLoader::add_resource_format_loader(voxel_lighting_loader);
+		ResourceSaver::add_resource_format_saver(voxel_lighting_saver);
 		voxel_volume_streaming_manager = memnew(VoxelVolumeStreamingManager);
 	}
 
@@ -363,10 +364,10 @@ void initialize_voxel_physics_3d_module(ModuleInitializationLevel p_level) {
 
 void uninitialize_voxel_physics_3d_module(ModuleInitializationLevel p_level) {
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {
-  ResourceLoader::remove_resource_format_loader(voxel_lighting_loader);
-  ResourceSaver::remove_resource_format_saver(voxel_lighting_saver);
-  voxel_lighting_loader.unref();
-  voxel_lighting_saver.unref();
+		ResourceLoader::remove_resource_format_loader(voxel_lighting_loader);
+		ResourceSaver::remove_resource_format_saver(voxel_lighting_saver);
+		voxel_lighting_loader.unref();
+		voxel_lighting_saver.unref();
 		if (voxel_volume_streaming_manager != nullptr) {
 			memdelete(voxel_volume_streaming_manager);
 			voxel_volume_streaming_manager = nullptr;

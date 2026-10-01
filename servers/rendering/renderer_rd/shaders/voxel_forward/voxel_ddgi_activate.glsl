@@ -25,12 +25,27 @@ struct ProbeRecord {
 	uvec4 state_revision_frame_flags;
 };
 
-layout(set = 0, binding = 0, std430) buffer ProbeRecords { ProbeRecord values[]; } probe_records;
-layout(set = 0, binding = 1, std430) writeonly buffer ActiveProbeIndices { uint values[]; } active_probe_indices;
-layout(set = 0, binding = 2, std430) buffer ProbeCounters { uint values[6]; } probe_counters;
-layout(set = 0, binding = 3, std430) readonly buffer DynamicProbeMask { uint values[]; } dynamic_probe_mask;
+layout(set = 0, binding = 0, std430) buffer ProbeRecords {
+	ProbeRecord values[];
+}
+probe_records;
+layout(set = 0, binding = 1, std430) writeonly buffer ActiveProbeIndices {
+	uint values[];
+}
+active_probe_indices;
+layout(set = 0, binding = 2, std430) buffer ProbeCounters {
+	uint values[6];
+}
+probe_counters;
+layout(set = 0, binding = 3, std430) readonly buffer DynamicProbeMask {
+	uint values[];
+}
+dynamic_probe_mask;
 layout(rgba32f, set = 0, binding = 4) uniform restrict writeonly image2D probe_metadata;
-layout(set = 0, binding = 6, std430) writeonly buffer DispatchCommands { uint values[8]; } dispatch_commands;
+layout(set = 0, binding = 6, std430) writeonly buffer DispatchCommands {
+	uint values[8];
+}
+dispatch_commands;
 
 layout(push_constant, std430) uniform Params {
 	vec4 world_origin_voxel_size;
@@ -40,7 +55,8 @@ layout(push_constant, std430) uniform Params {
 	uvec4 directory_revision;
 	uvec4 schedule;
 	uvec4 changes;
-} params;
+}
+params;
 
 uint probe_generation(ivec4 logical_cell_lod) {
 	uvec4 bits = uvec4(logical_cell_lod);
@@ -99,10 +115,14 @@ void append_probe(uint index, uint scheduler_class) {
 
 void main() {
 	uint traversal_index = gl_GlobalInvocationID.x;
-	if (traversal_index >= params.schedule.y) return;
+	if (traversal_index >= params.schedule.y) {
+		return;
+	}
 	uint phase = uint(params.grid_resolution_phase.w);
 	if (phase == 1u) {
-		if (traversal_index != 0u) return;
+		if (traversal_index != 0u) {
+			return;
+		}
 		uint dirty_count = min(probe_counters.values[3], params.schedule.y);
 		uint new_count = min(probe_counters.values[4], params.schedule.y);
 		uint mature_count = min(probe_counters.values[5], params.schedule.y);
@@ -120,17 +140,27 @@ void main() {
 	}
 	int resolution = params.grid_resolution_phase.x;
 	ivec3 local = morton_coord(traversal_index);
-	if (any(greaterThanEqual(local, ivec3(resolution)))) return;
+	if (any(greaterThanEqual(local, ivec3(resolution)))) {
+		return;
+	}
 	ivec3 logical_cell = params.grid_origin_lod.xyz + local;
 	uint invocation = probe_index(physical_coord(logical_cell, resolution), resolution);
 	ProbeRecord record = probe_records.values[invocation];
 	uint state = record.state_revision_frame_flags.x;
-	if (state == PROBE_OFF || record.physical_position_valid.w <= 0.5) return;
+	if (state == PROBE_OFF || record.physical_position_valid.w <= 0.5) {
+		return;
+	}
 	logical_cell = record.logical_cell_lod.xyz;
 	local = logical_cell - params.grid_origin_lod.xyz;
-	if (any(lessThan(local, ivec3(0))) || any(greaterThanEqual(local, ivec3(resolution)))) return;
-	if (probe_index(physical_coord(logical_cell, resolution), resolution) != invocation) return;
-	if (any(notEqual(record.logical_cell_lod, ivec4(logical_cell, params.grid_origin_lod.w)))) return;
+	if (any(lessThan(local, ivec3(0))) || any(greaterThanEqual(local, ivec3(resolution)))) {
+		return;
+	}
+	if (probe_index(physical_coord(logical_cell, resolution), resolution) != invocation) {
+		return;
+	}
+	if (any(notEqual(record.logical_cell_lod, ivec4(logical_cell, params.grid_origin_lod.w)))) {
+		return;
+	}
 	if (state == PROBE_RETIRING) {
 		append_probe(invocation, 2u);
 		imageStore(probe_metadata, metadata_texel(invocation, resolution), vec4(record.physical_position_valid.xyz, packed_metadata(state, record.logical_cell_lod)));
@@ -141,8 +171,11 @@ void main() {
 	// integration keeps the same-cell history visible while blending the change.
 	bool dynamic_changed = params.changes.z != 0u && (dynamic_probe_mask.values[invocation] & 2u) != 0u;
 	if (params.changes.x != 0u || dynamic_changed) {
-		if (state == PROBE_AWAKE) state = PROBE_DIRTY_AWAKE;
-		else if (state == PROBE_VIGILANT) state = PROBE_DIRTY_VIGILANT;
+		if (state == PROBE_AWAKE) {
+			state = PROBE_DIRTY_AWAKE;
+		} else if (state == PROBE_VIGILANT) {
+			state = PROBE_DIRTY_VIGILANT;
+		}
 		if (state == PROBE_DIRTY_AWAKE || state == PROBE_DIRTY_VIGILANT) {
 			record.state_revision_frame_flags.z = 0u;
 		}
@@ -153,7 +186,9 @@ void main() {
 			ivec3(0, -1, 0), ivec3(0, 0, 1), ivec3(0, 0, -1));
 	for (int neighbor = 0; neighbor < 6 && !static_surface; neighbor++) {
 		ivec3 neighbor_local = local + neighbor_axes[neighbor];
-		if (any(lessThan(neighbor_local, ivec3(0))) || any(greaterThanEqual(neighbor_local, ivec3(resolution)))) continue;
+		if (any(lessThan(neighbor_local, ivec3(0))) || any(greaterThanEqual(neighbor_local, ivec3(resolution)))) {
+			continue;
+		}
 		ivec3 expected_cell = logical_cell + neighbor_axes[neighbor];
 		ProbeRecord neighbor_record = probe_records.values[probe_index(physical_coord(expected_cell, resolution), resolution)];
 		static_surface = all(equal(neighbor_record.logical_cell_lod, ivec4(expected_cell, params.grid_origin_lod.w))) &&
@@ -165,13 +200,21 @@ void main() {
 	if (!static_surface && !dynamic_surface) {
 		state = PROBE_SLEEPING;
 	} else if (static_surface) {
-		if (state == PROBE_NEWLY_AWAKE) state = PROBE_NEWLY_VIGILANT;
-		else if (state == PROBE_DIRTY_AWAKE) state = PROBE_DIRTY_VIGILANT;
-		else if (state != PROBE_NEWLY_VIGILANT && state != PROBE_DIRTY_VIGILANT) state = PROBE_VIGILANT;
+		if (state == PROBE_NEWLY_AWAKE) {
+			state = PROBE_NEWLY_VIGILANT;
+		} else if (state == PROBE_DIRTY_AWAKE) {
+			state = PROBE_DIRTY_VIGILANT;
+		} else if (state != PROBE_NEWLY_VIGILANT && state != PROBE_DIRTY_VIGILANT) {
+			state = PROBE_VIGILANT;
+		}
 	} else {
-		if (state == PROBE_NEWLY_VIGILANT) state = PROBE_NEWLY_AWAKE;
-		else if (state == PROBE_DIRTY_VIGILANT) state = PROBE_DIRTY_AWAKE;
-		else if (state != PROBE_NEWLY_AWAKE && state != PROBE_DIRTY_AWAKE) state = PROBE_AWAKE;
+		if (state == PROBE_NEWLY_VIGILANT) {
+			state = PROBE_NEWLY_AWAKE;
+		} else if (state == PROBE_DIRTY_VIGILANT) {
+			state = PROBE_DIRTY_AWAKE;
+		} else if (state != PROBE_NEWLY_AWAKE && state != PROBE_DIRTY_AWAKE) {
+			state = PROBE_AWAKE;
+		}
 	}
 	record.state_revision_frame_flags.x = state;
 	probe_records.values[invocation] = record;

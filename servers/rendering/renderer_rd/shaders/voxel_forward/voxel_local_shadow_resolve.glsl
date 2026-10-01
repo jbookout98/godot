@@ -88,9 +88,15 @@ float distance_to_exit(vec3 position, vec3 direction, float cell_size) {
 	vec3 cell = floor(position / cell_size);
 	vec3 boundary = (cell + step(vec3(0.0), direction)) * cell_size;
 	vec3 distance = vec3(HUGE_DISTANCE);
-	if (abs(direction.x) > DIRECTION_EPSILON) distance.x = (boundary.x - position.x) / direction.x;
-	if (abs(direction.y) > DIRECTION_EPSILON) distance.y = (boundary.y - position.y) / direction.y;
-	if (abs(direction.z) > DIRECTION_EPSILON) distance.z = (boundary.z - position.z) / direction.z;
+	if (abs(direction.x) > DIRECTION_EPSILON) {
+		distance.x = (boundary.x - position.x) / direction.x;
+	}
+	if (abs(direction.y) > DIRECTION_EPSILON) {
+		distance.y = (boundary.y - position.y) / direction.y;
+	}
+	if (abs(direction.z) > DIRECTION_EPSILON) {
+		distance.z = (boundary.z - position.z) / direction.z;
+	}
 	return max(min(distance.x, min(distance.y, distance.z)), 0.0001);
 }
 
@@ -145,24 +151,42 @@ float trace_shadow(vec3 receiver_position, vec3 direction, float maximum_distanc
 }
 
 float trace_dynamic_shadow(vec3 receiver_world, vec3 direction_world, float maximum_distance_world) {
-	if (dynamic_voxel_volumes.state.x == 0u) return 1.0;
+	if (dynamic_voxel_volumes.state.x == 0u) {
+		return 1.0;
+	}
 	vec3 hit_position;
 	vec3 hit_normal;
 	float hit_distance;
 	bool hit_backface;
 	float ray_bias = max(occupancy.world_origin_voxel_size.w * 0.01, 0.0001);
 	return dynamic_trace_voxels(receiver_world + direction_world * ray_bias, direction_world, maximum_distance_world,
-			hit_position, hit_normal, hit_distance, hit_backface) ? 0.0 : 1.0;
+				   hit_position, hit_normal, hit_distance, hit_backface)
+			? 0.0
+			: 1.0;
 }
 
 vec2 disk_sample(int sample_index) {
-	if (sample_index == 0) return vec2(-0.625, -0.250);
-	if (sample_index == 1) return vec2(0.250, -0.625);
-	if (sample_index == 2) return vec2(0.625, 0.250);
-	if (sample_index == 3) return vec2(-0.250, 0.625);
-	if (sample_index == 4) return vec2(-0.300, -0.100);
-	if (sample_index == 5) return vec2(0.100, -0.300);
-	if (sample_index == 6) return vec2(0.300, 0.100);
+	if (sample_index == 0) {
+		return vec2(-0.625, -0.250);
+	}
+	if (sample_index == 1) {
+		return vec2(0.250, -0.625);
+	}
+	if (sample_index == 2) {
+		return vec2(0.625, 0.250);
+	}
+	if (sample_index == 3) {
+		return vec2(-0.250, 0.625);
+	}
+	if (sample_index == 4) {
+		return vec2(-0.300, -0.100);
+	}
+	if (sample_index == 5) {
+		return vec2(0.100, -0.300);
+	}
+	if (sample_index == 6) {
+		return vec2(0.300, 0.100);
+	}
 	return vec2(-0.100, 0.300);
 }
 
@@ -228,8 +252,12 @@ float resolve_visibility(VoxelLocalShadowEntry light, vec3 receiver_world, vec3 
 		visibility += static_visibility * dynamic_visibility;
 	}
 	float averaged_visibility = visibility / float(sample_count);
-	if (visibility <= 1.0) averaged_visibility = 0.0;
-	if (visibility >= float(sample_count - 1)) averaged_visibility = 1.0;
+	if (visibility <= 1.0) {
+		averaged_visibility = 0.0;
+	}
+	if (visibility >= float(sample_count - 1)) {
+		averaged_visibility = 1.0;
+	}
 	return averaged_visibility;
 }
 

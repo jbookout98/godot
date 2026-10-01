@@ -55,9 +55,9 @@ params;
 
 const int DIRECTION_COUNT = 6;
 const vec3 DIRECTION_AXES[6] = vec3[6](
-	vec3(1.0, 0.0, 0.0), vec3(-1.0, 0.0, 0.0),
-	vec3(0.0, 1.0, 0.0), vec3(0.0, -1.0, 0.0),
-	vec3(0.0, 0.0, 1.0), vec3(0.0, 0.0, -1.0));
+		vec3(1.0, 0.0, 0.0), vec3(-1.0, 0.0, 0.0),
+		vec3(0.0, 1.0, 0.0), vec3(0.0, -1.0, 0.0),
+		vec3(0.0, 0.0, 1.0), vec3(0.0, 0.0, -1.0));
 
 ivec3 directional_texel(ivec3 cell, int direction, int resolution) {
 	return ivec3(cell.x + direction * resolution, cell.y, cell.z);
@@ -139,8 +139,12 @@ bool sample_clip_cell(sampler3D color_grid, sampler3D material_grid, vec4 origin
 }
 
 bool sample_surface_data(vec3 world_position, out vec3 albedo, out vec4 material) {
-	if (sample_clip_cell(color_near, material_near, color_params.origin_cell_size[0], world_position, albedo, material)) return true;
-	if (sample_clip_cell(color_far, material_far, color_params.origin_cell_size[1], world_position, albedo, material)) return true;
+	if (sample_clip_cell(color_near, material_near, color_params.origin_cell_size[0], world_position, albedo, material)) {
+		return true;
+	}
+	if (sample_clip_cell(color_far, material_far, color_params.origin_cell_size[1], world_position, albedo, material)) {
+		return true;
+	}
 	return sample_clip_cell(color_distant, material_distant, color_params.origin_cell_size[2], world_position, albedo, material);
 }
 
@@ -172,9 +176,13 @@ float connection_transmittance(vec3 cell_center, int direction_index) {
 				} else {
 					ray_transmittance = 0.0;
 				}
-				if (ray_transmittance <= 0.001) break;
+				if (ray_transmittance <= 0.001) {
+					break;
+				}
 			}
-			if (all(equal(voxel_position, end_voxel))) break;
+			if (all(equal(voxel_position, end_voxel))) {
+				break;
+			}
 			voxel_position += voxel_step;
 		}
 		transmitted_rays += ray_transmittance;
@@ -238,7 +246,9 @@ void main() {
 		vec3 injected = vec3(0.0);
 		for (int voxel_index = 0; voxel_index < 256; voxel_index++) {
 			if (!voxel_occupied(search_voxel)) {
-				if (all(equal(search_voxel, end_voxel))) break;
+				if (all(equal(search_voxel, end_voxel))) {
+					break;
+				}
 				search_voxel += voxel_step;
 				continue;
 			}

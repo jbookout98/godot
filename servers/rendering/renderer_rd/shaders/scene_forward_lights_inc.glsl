@@ -382,7 +382,7 @@ half sample_pcf_shadow(texture2D shadow, vec2 shadow_pixel_size, vec3 coord, flo
 }
 
 half sample_omni_pcf_shadow(texture2D shadow, float blur_scale, vec2 coord, vec4 uv_rect, vec2 flip_offset, float depth, float taa_frame_count) {
-	#ifdef VOXEL_FACE_LIGHTING_USED
+#ifdef VOXEL_FACE_LIGHTING_USED
 	vec2 face_center_position = coord * 0.5 + 0.5;
 	face_center_position = uv_rect.xy + face_center_position * uv_rect.zw;
 	return half(textureProj(sampler2DShadow(shadow, shadow_sampler), vec4(face_center_position, depth, 1.0)));
@@ -436,7 +436,7 @@ half sample_omni_pcf_shadow(texture2D shadow, float blur_scale, vec2 coord, vec4
 }
 
 half sample_directional_soft_shadow(texture2D shadow, vec3 pssm_coord, vec2 tex_scale, float taa_frame_count) {
-	#ifdef VOXEL_FACE_LIGHTING_USED
+#ifdef VOXEL_FACE_LIGHTING_USED
 	return half(textureProj(sampler2DShadow(shadow, shadow_sampler), vec4(pssm_coord.xy, pssm_coord.z, 1.0)));
 #endif
 

@@ -1,3 +1,33 @@
+/**************************************************************************/
+/*  voxel_material.cpp                                                    */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
+
 #include "voxel_material.h"
 
 #include "core/config/project_settings.h"
@@ -157,7 +187,7 @@ vec2 voxel_ddgi_oct_encode(vec3 direction) {
 
 vec2 voxel_ddgi_tile_uv(ivec2 tile, int tile_size, int interior_size, vec2 oct, vec2 atlas_size) {
 	// Every probe owns a one-texel guard border. Sample only between interior
-	// texel centres; filtering therefore remains inside this probe's tile.
+	// texel centers; filtering therefore remains inside this probe's tile.
 	vec2 pixel = vec2(tile * tile_size) + vec2(1.5) + clamp(oct, vec2(0.0), vec2(1.0)) * float(interior_size - 1);
 	return pixel / atlas_size;
 }
@@ -1267,13 +1297,15 @@ uniform float u_voxel_size = 0.1;
 		uvec2 quantized_normal = uvec2(round(clamp(normal_oct * 0.5 + 0.5, vec2(0.0), vec2(1.0)) * 4095.0));
 		uint packed_world_normal = quantized_normal.x | (quantized_normal.y << 12u);
 		VOXEL_HIT_POSITION = vec4(canonical_world_face, float(packed_world_normal + 1u));
-)SHADER") : String());
+)SHADER")
+																							 : String());
 			body = body.replace("// ARCH_HIT_POSITION_READ", use_architectural_hit_position ? String(R"SHADER(
 		if (VOXEL_HIT_POSITION.w < 1.0) discard;
 		hit_local_position = (VOXEL_INV_MODEL_MATRIX * vec4(VOXEL_HIT_POSITION.xyz, 1.0)).xyz;
 		hit_voxel_position = hit_local_position / u_voxel_size;
 		hit_view_position = VIEW_MATRIX * vec4(VOXEL_HIT_POSITION.xyz, 1.0);
-)SHADER") : String(R"SHADER(
+)SHADER")
+																							: String(R"SHADER(
 		vec2 hit_ndc_xy = SCREEN_UV * 2.0 - vec2(1.0);
 		vec4 reconstructed_view = INV_PROJECTION_MATRIX * vec4(hit_ndc_xy, VOXEL_HIT_DEPTH, 1.0);
 		if (abs(reconstructed_view.w) <= DIR_EPSILON) discard;
@@ -1404,12 +1436,14 @@ uniform float ambient_occlusion_direct_light_influence : hint_range(0.0, 1.0) = 
 		body = body.replace("// OUTLINE_UNIFORMS", use_material_outline ? String(R"SHADER(
 uniform vec4 outline_color : source_color = vec4(0.0, 0.0, 0.0, 1.0);
 uniform float outline_width = 1.0;
-)SHADER") : String());
+)SHADER")
+																		: String());
 		body = body.replace("// OUTLINE_FUNCTION", use_material_outline ? String(VOXEL_OUTLINE_FUNCTION) : String());
 		body = body.replace("// ALBEDO_OUTPUT", use_material_outline ? String(R"SHADER(
 	float outline = voxel_normal_outline(hit_voxel, hit_voxel_position, hit_axis) * outline_color.a;
 	ALBEDO = mix(palette_color * albedo_modulate.rgb, outline_color.rgb, outline);
-)SHADER") : "ALBEDO = palette_color * albedo_modulate.rgb;");
+)SHADER")
+																	 : "ALBEDO = palette_color * albedo_modulate.rgb;");
 		body = body.replace("// VOXEL_FORWARD_INDIRECT_UNIFORMS", use_voxel_forward_indirect ? String(R"SHADER(
 global uniform sampler3D voxel_forward_indirect_near : filter_linear, repeat_disable;
 global uniform sampler3D voxel_forward_indirect_far : filter_linear, repeat_disable;
@@ -1480,18 +1514,21 @@ global uniform float voxel_forward_ddgi_shadow_fill_strength;
 global uniform vec4 voxel_forward_ddgi_shadow_fill_tint : source_color;
 global uniform float voxel_forward_ddgi_shadow_fill_reach;
 global uniform float voxel_forward_ddgi_color_saturation;
-)SHADER") : String());
+)SHADER")
+																							 : String());
 		body = body.replace("// VOXEL_FORWARD_INDIRECT_FUNCTIONS", use_voxel_forward_indirect ? String(VOXEL_FORWARD_INDIRECT_FUNCTIONS) : String());
 		body = body.replace("// VOXEL_FORWARD_REFLECTION_UNIFORMS", use_voxel_forward_reflection ? String(R"SHADER(
 global uniform sampler2D voxel_forward_reflection : filter_nearest, repeat_disable;
 global uniform bool voxel_forward_reflection_ready;
 global uniform float voxel_forward_reflection_intensity;
-)SHADER") : String());
+)SHADER")
+																								 : String());
 		body = body.replace("// TRANSPARENCY_UNIFORM", transparency_enabled ? "uniform sampler2D u_transparency : filter_nearest, repeat_disable;" : "");
 		body = body.replace("// TRANSPARENCY_OCCUPANCY_CHECK", transparency_enabled ? R"SHADER(
 	vec2 transparency_uv = vec2((float(voxel_id) + 0.5) / 256.0, 0.5);
 	if (textureLod(u_transparency, transparency_uv, 0.0).r <= 0.001) return false;
-)SHADER" : "");
+)SHADER"
+																					: "");
 		body = body.replace("// TRANSPARENCY_OUTPUT", transparency_enabled ? "ALPHA = textureLod(u_transparency, palette_uv, 0.0).r;" : "");
 		body = body.replace("// LIGHTING_VERTEX_OUTPUT", use_face_center_lighting ? String(R"SHADER(
 	// Optional stylized mode: evaluate direct and reflective lighting once from
@@ -1501,7 +1538,8 @@ global uniform float voxel_forward_reflection_intensity;
 		lighting_voxel_position[hit_axis] = float(hit_voxel[hit_axis]) + (local_normal[hit_axis] > 0.0 ? 1.0 : 0.0);
 	}
 	LIGHTING_VERTEX = (VIEW_MATRIX * MODEL_MATRIX * vec4(lighting_voxel_position * u_voxel_size, 1.0)).xyz;
-)SHADER") : String());
+)SHADER")
+																				  : String());
 		String voxel_forward_enable;
 		if (use_voxel_forward_lighting) {
 			voxel_forward_enable = "VOXEL_FACE_LIGHTING = true;";
@@ -1516,7 +1554,7 @@ global uniform float voxel_forward_reflection_intensity;
 	vec3 indirect_world_position = (MODEL_MATRIX * vec4(indirect_local_position, 1.0)).xyz;
 	// The lookup begins on the voxel face already. Only move it far enough to
 	// resolve floating-point boundary ambiguity. Biasing by a fraction of the GI
-	// cell size can move a sample metres away, through the opposite wall of a
+	// cell size can move a sample meters away, through the opposite wall of a
 	// corridor, and makes the selected irradiance jump as visible faces change.
 	float indirect_surface_bias = max(length((MODEL_MATRIX * vec4(local_normal * u_voxel_size, 0.0)).xyz) * 0.02, 0.0001);
 	vec3 indirect_sample_position = indirect_world_position + indirect_world_normal * indirect_surface_bias;
@@ -1697,12 +1735,14 @@ global uniform float voxel_forward_reflection_intensity;
 	} else {
 		EMISSION += fallback_contribution + indirect_contribution;
 	}
-)SHADER") : String(R"SHADER(
+)SHADER")
+																													   : String(R"SHADER(
 	// Legacy/no-DDGI fallback. DDGI materials instead blend this term per pixel
 	// using initialized probe coverage so it cannot illuminate through walls.
 	EMISSION += palette_color * voxel_forward_ambient_color.rgb * voxel_forward_ambient_energy * voxel_ao_indirect_factor;
-)SHADER")) : String());
-	body = body.replace("// REFLECTION_OUTPUT", use_voxel_forward_reflection ? String(R"SHADER(
+)SHADER"))
+																						 : String());
+		body = body.replace("// REFLECTION_OUTPUT", use_voxel_forward_reflection ? String(R"SHADER(
 	if (voxel_forward_reflection_ready) {
 		// The resolve pass traces one ray from the shared-world face center, so this
 		// radiance is constant across the complete voxel face, including where two
@@ -1712,7 +1752,8 @@ global uniform float voxel_forward_reflection_intensity;
 		float reflection_gloss = 1.0 - ROUGHNESS;
 		EMISSION += reflected_radiance * reflection_f0 * reflection_gloss * reflection_gloss * voxel_forward_reflection_intensity;
 	}
-)SHADER") : String());
+)SHADER")
+																				 : String());
 		body = body.replace("// OCCUPANCY_LIGHT", use_voxel_forward_lighting ? String(VOXEL_FORWARD_LIGHT_BODY) : String());
 		code += ";\n" + body;
 		voxel_shader->set_code(code);
@@ -1748,7 +1789,9 @@ global uniform float voxel_forward_reflection_intensity;
 
 void VoxelMaterial::set_shading_mode(ShadingMode p_mode) {
 	ERR_FAIL_INDEX(p_mode, 2);
-	if (shading_mode == p_mode) return;
+	if (shading_mode == p_mode) {
+		return;
+	}
 	shading_mode = p_mode;
 	if (get_shader().is_valid()) {
 		_rebuild_shader();
@@ -1756,11 +1799,15 @@ void VoxelMaterial::set_shading_mode(ShadingMode p_mode) {
 	emit_changed();
 }
 
-VoxelMaterial::ShadingMode VoxelMaterial::get_shading_mode() const { return shading_mode; }
+VoxelMaterial::ShadingMode VoxelMaterial::get_shading_mode() const {
+	return shading_mode;
+}
 
 void VoxelMaterial::set_lighting_position_mode(LightingPositionMode p_mode) {
 	ERR_FAIL_INDEX(p_mode, 2);
-	if (lighting_position_mode == p_mode) return;
+	if (lighting_position_mode == p_mode) {
+		return;
+	}
 	lighting_position_mode = p_mode;
 	if (get_shader().is_valid()) {
 		_rebuild_shader();
@@ -1768,7 +1815,9 @@ void VoxelMaterial::set_lighting_position_mode(LightingPositionMode p_mode) {
 	emit_changed();
 }
 
-VoxelMaterial::LightingPositionMode VoxelMaterial::get_lighting_position_mode() const { return lighting_position_mode; }
+VoxelMaterial::LightingPositionMode VoxelMaterial::get_lighting_position_mode() const {
+	return lighting_position_mode;
+}
 
 void VoxelMaterial::set_emission_energy(real_t p_energy) {
 	emission_energy = MAX(p_energy, real_t(0.0));
@@ -1778,7 +1827,9 @@ void VoxelMaterial::set_emission_energy(real_t p_energy) {
 	emit_changed();
 }
 
-real_t VoxelMaterial::get_emission_energy() const { return emission_energy; }
+real_t VoxelMaterial::get_emission_energy() const {
+	return emission_energy;
+}
 
 void VoxelMaterial::_emit_ambient_occlusion_changed() {
 	ambient_occlusion_change_in_progress = true;
@@ -1797,7 +1848,9 @@ void VoxelMaterial::set_ambient_occlusion_enabled(bool p_enabled) {
 	_emit_ambient_occlusion_changed();
 }
 
-bool VoxelMaterial::is_ambient_occlusion_enabled() const { return ambient_occlusion_enabled; }
+bool VoxelMaterial::is_ambient_occlusion_enabled() const {
+	return ambient_occlusion_enabled;
+}
 
 void VoxelMaterial::set_ambient_occlusion_color(const Color &p_color) {
 	if (ambient_occlusion_color == p_color) {
@@ -1810,7 +1863,9 @@ void VoxelMaterial::set_ambient_occlusion_color(const Color &p_color) {
 	_emit_ambient_occlusion_changed();
 }
 
-Color VoxelMaterial::get_ambient_occlusion_color() const { return ambient_occlusion_color; }
+Color VoxelMaterial::get_ambient_occlusion_color() const {
+	return ambient_occlusion_color;
+}
 
 void VoxelMaterial::set_ambient_occlusion_strength(real_t p_strength) {
 	p_strength = CLAMP(p_strength, real_t(0.0), real_t(1.0));
@@ -1828,11 +1883,17 @@ void VoxelMaterial::set_ambient_occlusion_strength(real_t p_strength) {
 	_emit_ambient_occlusion_changed();
 }
 
-real_t VoxelMaterial::get_ambient_occlusion_strength() const { return ambient_occlusion_strength; }
+real_t VoxelMaterial::get_ambient_occlusion_strength() const {
+	return ambient_occlusion_strength;
+}
 
-void VoxelMaterial::set_ambient_occlusion_intensity(real_t p_intensity) { set_ambient_occlusion_strength(p_intensity); }
+void VoxelMaterial::set_ambient_occlusion_intensity(real_t p_intensity) {
+	set_ambient_occlusion_strength(p_intensity);
+}
 
-real_t VoxelMaterial::get_ambient_occlusion_intensity() const { return get_ambient_occlusion_strength(); }
+real_t VoxelMaterial::get_ambient_occlusion_intensity() const {
+	return get_ambient_occlusion_strength();
+}
 
 void VoxelMaterial::set_ambient_occlusion_hardness(real_t p_hardness) {
 	p_hardness = CLAMP(p_hardness, real_t(0.0), real_t(1.0));
@@ -1850,11 +1911,17 @@ void VoxelMaterial::set_ambient_occlusion_hardness(real_t p_hardness) {
 	_emit_ambient_occlusion_changed();
 }
 
-real_t VoxelMaterial::get_ambient_occlusion_hardness() const { return ambient_occlusion_hardness; }
+real_t VoxelMaterial::get_ambient_occlusion_hardness() const {
+	return ambient_occlusion_hardness;
+}
 
-void VoxelMaterial::set_ambient_occlusion_contrast(real_t p_contrast) { set_ambient_occlusion_hardness(p_contrast); }
+void VoxelMaterial::set_ambient_occlusion_contrast(real_t p_contrast) {
+	set_ambient_occlusion_hardness(p_contrast);
+}
 
-real_t VoxelMaterial::get_ambient_occlusion_contrast() const { return get_ambient_occlusion_hardness(); }
+real_t VoxelMaterial::get_ambient_occlusion_contrast() const {
+	return get_ambient_occlusion_hardness();
+}
 
 void VoxelMaterial::set_ambient_occlusion_direct_light_influence(real_t p_influence) {
 	p_influence = CLAMP(p_influence, real_t(0.0), real_t(1.0));
@@ -1868,7 +1935,9 @@ void VoxelMaterial::set_ambient_occlusion_direct_light_influence(real_t p_influe
 	_emit_ambient_occlusion_changed();
 }
 
-real_t VoxelMaterial::get_ambient_occlusion_direct_light_influence() const { return ambient_occlusion_direct_light_influence; }
+real_t VoxelMaterial::get_ambient_occlusion_direct_light_influence() const {
+	return ambient_occlusion_direct_light_influence;
+}
 
 void VoxelMaterial::set_ambient_occlusion_tint_enabled(bool p_enabled) {
 	if (ambient_occlusion_tint_enabled == p_enabled) {
@@ -1881,7 +1950,9 @@ void VoxelMaterial::set_ambient_occlusion_tint_enabled(bool p_enabled) {
 	_emit_ambient_occlusion_changed();
 }
 
-bool VoxelMaterial::is_ambient_occlusion_tint_enabled() const { return ambient_occlusion_tint_enabled; }
+bool VoxelMaterial::is_ambient_occlusion_tint_enabled() const {
+	return ambient_occlusion_tint_enabled;
+}
 
 void VoxelMaterial::set_ambient_occlusion_tint_strength(real_t p_strength) {
 	p_strength = CLAMP(p_strength, real_t(0.0), real_t(1.0));
@@ -1895,7 +1966,9 @@ void VoxelMaterial::set_ambient_occlusion_tint_strength(real_t p_strength) {
 	_emit_ambient_occlusion_changed();
 }
 
-real_t VoxelMaterial::get_ambient_occlusion_tint_strength() const { return ambient_occlusion_tint_strength; }
+real_t VoxelMaterial::get_ambient_occlusion_tint_strength() const {
+	return ambient_occlusion_tint_strength;
+}
 
 void VoxelMaterial::set_ambient_occlusion_tint_palette_texture(const Ref<Texture2D> &p_texture) {
 	if (ambient_occlusion_tint_palette_texture == p_texture) {
@@ -1913,7 +1986,9 @@ void VoxelMaterial::set_ambient_occlusion_tint_palette_texture(const Ref<Texture
 	_emit_ambient_occlusion_changed();
 }
 
-Ref<Texture2D> VoxelMaterial::get_ambient_occlusion_tint_palette_texture() const { return ambient_occlusion_tint_palette_texture; }
+Ref<Texture2D> VoxelMaterial::get_ambient_occlusion_tint_palette_texture() const {
+	return ambient_occlusion_tint_palette_texture;
+}
 
 void VoxelMaterial::set_ambient_occlusion_mode(AmbientOcclusionMode p_mode) {
 	ERR_FAIL_INDEX(p_mode, 3);
@@ -1927,7 +2002,9 @@ void VoxelMaterial::set_ambient_occlusion_mode(AmbientOcclusionMode p_mode) {
 	_emit_ambient_occlusion_changed();
 }
 
-VoxelMaterial::AmbientOcclusionMode VoxelMaterial::get_ambient_occlusion_mode() const { return ambient_occlusion_mode; }
+VoxelMaterial::AmbientOcclusionMode VoxelMaterial::get_ambient_occlusion_mode() const {
+	return ambient_occlusion_mode;
+}
 
 void VoxelMaterial::set_ambient_occlusion_face_mode(AmbientOcclusionFaceMode p_mode) {
 	ERR_FAIL_INDEX(p_mode, 3);
@@ -1941,9 +2018,13 @@ void VoxelMaterial::set_ambient_occlusion_face_mode(AmbientOcclusionFaceMode p_m
 	_emit_ambient_occlusion_changed();
 }
 
-VoxelMaterial::AmbientOcclusionFaceMode VoxelMaterial::get_ambient_occlusion_face_mode() const { return ambient_occlusion_face_mode; }
+VoxelMaterial::AmbientOcclusionFaceMode VoxelMaterial::get_ambient_occlusion_face_mode() const {
+	return ambient_occlusion_face_mode;
+}
 
-bool VoxelMaterial::is_ambient_occlusion_change_in_progress() const { return ambient_occlusion_change_in_progress; }
+bool VoxelMaterial::is_ambient_occlusion_change_in_progress() const {
+	return ambient_occlusion_change_in_progress;
+}
 
 void VoxelMaterial::set_albedo_modulate(const Color &p_color) {
 	if (albedo_modulate == p_color) {
@@ -1956,7 +2037,9 @@ void VoxelMaterial::set_albedo_modulate(const Color &p_color) {
 	emit_changed();
 }
 
-Color VoxelMaterial::get_albedo_modulate() const { return albedo_modulate; }
+Color VoxelMaterial::get_albedo_modulate() const {
+	return albedo_modulate;
+}
 
 #define VOXEL_MATERIAL_TEXTURE_ACCESSORS(m_name) \
 	void VoxelMaterial::set_##m_name(const Ref<Texture2D> &p_texture) { \
@@ -1966,7 +2049,9 @@ Color VoxelMaterial::get_albedo_modulate() const { return albedo_modulate; }
 		m_name = p_texture; \
 		emit_changed(); \
 	} \
-	Ref<Texture2D> VoxelMaterial::get_##m_name() const { return m_name; }
+	Ref<Texture2D> VoxelMaterial::get_##m_name() const { \
+		return m_name; \
+	}
 
 VOXEL_MATERIAL_TEXTURE_ACCESSORS(palette_texture)
 VOXEL_MATERIAL_TEXTURE_ACCESSORS(material_texture)
@@ -1989,7 +2074,9 @@ void VoxelMaterial::set_roughness_multiplier(real_t p_multiplier) {
 	emit_changed();
 }
 
-real_t VoxelMaterial::get_roughness_multiplier() const { return roughness_multiplier; }
+real_t VoxelMaterial::get_roughness_multiplier() const {
+	return roughness_multiplier;
+}
 
 void VoxelMaterial::set_metallic_multiplier(real_t p_multiplier) {
 	p_multiplier = MAX(p_multiplier, real_t(0.0));
@@ -2003,7 +2090,9 @@ void VoxelMaterial::set_metallic_multiplier(real_t p_multiplier) {
 	emit_changed();
 }
 
-real_t VoxelMaterial::get_metallic_multiplier() const { return metallic_multiplier; }
+real_t VoxelMaterial::get_metallic_multiplier() const {
+	return metallic_multiplier;
+}
 
 void VoxelMaterial::set_specularity_multiplier(real_t p_multiplier) {
 	p_multiplier = MAX(p_multiplier, real_t(0.0));
@@ -2017,7 +2106,9 @@ void VoxelMaterial::set_specularity_multiplier(real_t p_multiplier) {
 	emit_changed();
 }
 
-real_t VoxelMaterial::get_specularity_multiplier() const { return specularity_multiplier; }
+real_t VoxelMaterial::get_specularity_multiplier() const {
+	return specularity_multiplier;
+}
 
 void VoxelMaterial::set_outline_enabled(bool p_enabled) {
 	if (outline_enabled == p_enabled) {
@@ -2030,7 +2121,9 @@ void VoxelMaterial::set_outline_enabled(bool p_enabled) {
 	emit_changed();
 }
 
-bool VoxelMaterial::is_outline_enabled() const { return outline_enabled; }
+bool VoxelMaterial::is_outline_enabled() const {
+	return outline_enabled;
+}
 
 void VoxelMaterial::set_outline_color(const Color &p_color) {
 	if (outline_color == p_color) {
@@ -2045,7 +2138,9 @@ void VoxelMaterial::set_outline_color(const Color &p_color) {
 	emit_changed();
 }
 
-Color VoxelMaterial::get_outline_color() const { return outline_color; }
+Color VoxelMaterial::get_outline_color() const {
+	return outline_color;
+}
 
 void VoxelMaterial::set_outline_width(real_t p_width) {
 	p_width = CLAMP(p_width, real_t(0.25), real_t(4.0));
@@ -2061,15 +2156,23 @@ void VoxelMaterial::set_outline_width(real_t p_width) {
 	emit_changed();
 }
 
-real_t VoxelMaterial::get_outline_width() const { return outline_width; }
-
-void VoxelMaterial::set_transparency_enabled(bool p_enabled) {
-	if (transparency_enabled == p_enabled) return;
-	transparency_enabled = p_enabled;
-	if (get_shader().is_valid()) _rebuild_shader();
+real_t VoxelMaterial::get_outline_width() const {
+	return outline_width;
 }
 
-bool VoxelMaterial::is_transparency_enabled() const { return transparency_enabled; }
+void VoxelMaterial::set_transparency_enabled(bool p_enabled) {
+	if (transparency_enabled == p_enabled) {
+		return;
+	}
+	transparency_enabled = p_enabled;
+	if (get_shader().is_valid()) {
+		_rebuild_shader();
+	}
+}
+
+bool VoxelMaterial::is_transparency_enabled() const {
+	return transparency_enabled;
+}
 
 void VoxelMaterial::set_texture_features(bool p_metallic_enabled, bool p_specularity_enabled, bool p_emission_enabled) {
 	if (metallic_texture_enabled == p_metallic_enabled &&

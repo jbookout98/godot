@@ -3,6 +3,7 @@
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
 /**************************************************************************/
 /* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
 /* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
@@ -29,33 +30,33 @@
 
 #pragma once
 
-#include "servers/rendering/renderer_rd/pipeline_cache_rd.h"
 #include "servers/rendering/renderer_rd/forward_clustered/render_forward_clustered.h"
+#include "servers/rendering/renderer_rd/pipeline_cache_rd.h"
+#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_ddgi_activate.glsl.gen.h"
+#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_ddgi_debug.glsl.gen.h"
+#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_ddgi_integrate.glsl.gen.h"
+#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_ddgi_record_scroll.glsl.gen.h"
+#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_ddgi_resolve.glsl.gen.h"
+#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_ddgi_seed.glsl.gen.h"
+#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_ddgi_temporal.glsl.gen.h"
+#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_ddgi_trace.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_indirect_blend.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_indirect_boundary_delta.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_indirect_inject.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_indirect_propagate.glsl.gen.h"
-#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_ddgi_activate.glsl.gen.h"
-#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_ddgi_integrate.glsl.gen.h"
-#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_ddgi_debug.glsl.gen.h"
-#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_ddgi_record_scroll.glsl.gen.h"
-#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_ddgi_resolve.glsl.gen.h"
-#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_ddgi_temporal.glsl.gen.h"
-#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_ddgi_trace.glsl.gen.h"
-#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_restir_spatial.glsl.gen.h"
-#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_restir_temporal.glsl.gen.h"
-#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_restir_denoise.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_local_shadow_resolve.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_outline.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_reflection_color_inject.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_reflection_resolve.glsl.gen.h"
+#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_restir_denoise.glsl.gen.h"
+#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_restir_spatial.glsl.gen.h"
+#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_restir_temporal.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_shadow_atlas.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_shadow_atlas_scroll.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_shadow_resolve.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_visibility.glsl.gen.h"
-#include "voxel_forward_volume_storage.h"
-#include "voxel_lighting_data.h"
-#include "servers/rendering/renderer_rd/shaders/voxel_forward/voxel_ddgi_seed.glsl.gen.h"
+#include "servers/rendering/renderer_rd/voxel_forward/voxel_forward_volume_storage.h"
+#include "servers/rendering/renderer_rd/voxel_forward/voxel_lighting_data.h"
 
 namespace RendererSceneRenderImplementation {
 
@@ -66,7 +67,7 @@ class IndirectBoundaryReadbackReceiver;
 // behind this type one milestone at a time, keeping stock Forward+ available
 // as a known-good fallback throughout development.
 class RenderVoxelForward : public RenderForwardClustered {
- static RenderVoxelForward *bake_renderer;
+	static RenderVoxelForward *bake_renderer;
 	friend class IndirectBoundaryReadbackReceiver;
 
 private:
@@ -79,37 +80,37 @@ private:
 		float voxel_size = 0.1f;
 	};
 
- struct DdgiGpuProbeRecord;
- struct BakedWorld {
-  Ref<VoxelLightingData> data;
-  ObjectID owner;
-  HashMap<Vector4i, int> offsets;
-  HashMap<RID, uint64_t> authored_volume_revisions;
-  HashMap<RID, uint64_t> authored_local_light_versions;
-  HashMap<RID, Transform3D> authored_local_light_transforms;
-  uint64_t content_revision = UINT64_MAX;
-  uint64_t shading_revision = UINT64_MAX;
-  uint64_t lighting_revision = UINT64_MAX;
-  uint64_t local_light_hash = UINT64_MAX;
-  uint64_t restored_probes = 0;
-  uint32_t initial_lods = 0;
-  bool invalidated = false;
-  bool source_verified = false;
-  bool refresh_seeds = false;
-  bool verification_pending = false;
-  uint64_t ticket = 0;
-  Callable verify_source;
- };
- HashMap<RID, BakedWorld> baked_worlds;
- uint64_t next_bake_ticket = 0;
- VoxelDdgiSeedShaderRD ddgi_seed_shader;
- RID ddgi_seed_version;
- RID ddgi_seed_pipeline;
- void _invalidate_changed_bake();
- void _seed_baked_records(uint32_t p_lod, const Vector<uint32_t> &p_slots, const Vector<DdgiGpuProbeRecord> &p_records);
+	struct DdgiGpuProbeRecord;
+	struct BakedWorld {
+		Ref<VoxelLightingData> data;
+		ObjectID owner;
+		HashMap<Vector4i, int> offsets;
+		HashMap<RID, uint64_t> authored_volume_revisions;
+		HashMap<RID, uint64_t> authored_local_light_versions;
+		HashMap<RID, Transform3D> authored_local_light_transforms;
+		uint64_t content_revision = UINT64_MAX;
+		uint64_t shading_revision = UINT64_MAX;
+		uint64_t lighting_revision = UINT64_MAX;
+		uint64_t local_light_hash = UINT64_MAX;
+		uint64_t restored_probes = 0;
+		uint32_t initial_lods = 0;
+		bool invalidated = false;
+		bool source_verified = false;
+		bool refresh_seeds = false;
+		bool verification_pending = false;
+		uint64_t ticket = 0;
+		Callable verify_source;
+	};
+	HashMap<RID, BakedWorld> baked_worlds;
+	uint64_t next_bake_ticket = 0;
+	VoxelDdgiSeedShaderRD ddgi_seed_shader;
+	RID ddgi_seed_version;
+	RID ddgi_seed_pipeline;
+	void _invalidate_changed_bake();
+	void _seed_baked_records(uint32_t p_lod, const Vector<uint32_t> &p_slots, const Vector<DdgiGpuProbeRecord> &p_records);
 	VoxelForwardVolumeStorage volume_registry;
- VoxelForwardVolumeStorage *volume_storage = &volume_registry;
- RID lighting_scenario;
+	VoxelForwardVolumeStorage *volume_storage = &volume_registry;
+	RID lighting_scenario;
 	Vector<VisibleVolume> visible_volumes;
 	uint32_t last_registered_volume_count = UINT32_MAX;
 	uint32_t last_visible_volume_count = UINT32_MAX;
@@ -300,7 +301,7 @@ private:
 	bool indirect_dirty_updates_enabled = true;
 	// Irradiance and visibility have different angular-frequency requirements.
 	// Keep a one-texel guard border around every octahedral tile so filtered
-	// samples can never read a neighbouring probe.
+	// samples can never read a neighboring probe.
 	static constexpr uint32_t DDGI_IRRADIANCE_INTERIOR_SIZE = 8;
 	static constexpr uint32_t DDGI_IRRADIANCE_TILE_SIZE = DDGI_IRRADIANCE_INTERIOR_SIZE + 2;
 	static constexpr uint32_t DDGI_VISIBILITY_INTERIOR_SIZE = 16;
@@ -364,7 +365,6 @@ private:
 		uint64_t version = 0;
 	};
 
-
 	struct DdgiDynamicVolumeGpuData {
 		float world_to_voxel[3][4];
 		float normal_to_world[3][4];
@@ -374,7 +374,6 @@ private:
 		uint32_t brick_dimensions_brick_offset[4];
 		uint32_t storage[4];
 	};
-
 
 	struct DdgiResolveUniformData {
 		float origins[DDGI_LOD_COUNT][4];
@@ -637,7 +636,6 @@ private:
 		int32_t state[4];
 	};
 
-
 	void _render_shadow_atlas(const RenderDataRD *p_render_data);
 	void _reset_shadow_atlas_state();
 	void _release_shadow_atlas_snapshot(ShadowAtlasBuildState &r_state);
@@ -647,7 +645,7 @@ private:
 	void _indirect_boundary_delta_readback(const PackedByteArray &p_data, uint32_t p_cascade, uint64_t p_world_revision);
 	void _render_voxel_gi(const RenderDataRD *p_render_data, RID p_shadow_atlas, RID p_sampler, const Vector3 &p_light_direction, const Color &p_light_color, float p_light_energy);
 
- struct DdgiWorldState {
+	struct DdgiWorldState {
 		RID shadow_mask_texture;
 		RID shadow_mask_source_rd;
 		Size2i shadow_mask_screen_size;
@@ -771,11 +769,11 @@ private:
 		Vector<DdgiDynamicContentCacheEntry> ddgi_dynamic_content_cache;
 		Vector<AABB> ddgi_dynamic_current_bounds;
 		Vector<AABB> ddgi_dynamic_dirty_bounds[DDGI_LOD_COUNT];
- };
- DdgiWorldState ddgi_state;
- HashMap<RID, DdgiWorldState> ddgi_worlds;
- bool ddgi_context_changed = false;
- void _free_world_lighting();
+	};
+	DdgiWorldState ddgi_state;
+	HashMap<RID, DdgiWorldState> ddgi_worlds;
+	bool ddgi_context_changed = false;
+	void _free_world_lighting();
 	void _render_restir_gi(const RenderDataRD *p_render_data, RID p_sampler, const Vector3 &p_light_direction, const Color &p_light_color, float p_light_energy);
 	void _render_restir_gi_for_scene(const RenderDataRD *p_render_data);
 	void _render_ddgi_gi_for_scene(const RenderDataRD *p_render_data);
@@ -808,11 +806,11 @@ protected:
 	virtual void _render_scene_custom_opaque(RenderDataRD *p_render_data, RID p_framebuffer, uint32_t p_color_pass_flags, uint32_t p_color_attachment_count, bool p_depth_prepass) override;
 
 public:
- void free_voxel_world(RID p_scenario) override;
- static void lighting_cache_set(RID p_scenario, ObjectID p_owner, Ref<VoxelLightingData> p_data, Callable p_verify);
- static void lighting_cache_confirm(RID p_scenario, ObjectID p_owner, int64_t p_ticket, bool p_valid, Array p_source_bases);
- static void lighting_cache_capture(RID p_scenario, AABB p_bounds, Callable p_callback);
- static void lighting_cache_status(RID p_scenario, bool p_probe_statistics, Callable p_callback);
+	void free_voxel_world(RID p_scenario) override;
+	static void lighting_cache_set(RID p_scenario, ObjectID p_owner, Ref<VoxelLightingData> p_data, Callable p_verify);
+	static void lighting_cache_confirm(RID p_scenario, ObjectID p_owner, int64_t p_ticket, bool p_valid, Array p_source_bases);
+	static void lighting_cache_capture(RID p_scenario, AABB p_bounds, Callable p_callback);
+	static void lighting_cache_status(RID p_scenario, bool p_probe_statistics, Callable p_callback);
 	RenderVoxelForward();
 	~RenderVoxelForward();
 };

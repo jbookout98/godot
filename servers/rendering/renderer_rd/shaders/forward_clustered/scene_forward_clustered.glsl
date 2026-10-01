@@ -1159,9 +1159,15 @@ float voxel_occupancy_distance_to_exit(vec3 position, vec3 direction, float cell
 	vec3 cell = floor(position / cell_size);
 	vec3 boundary = (cell + step(vec3(0.0), direction)) * cell_size;
 	vec3 distance = vec3(1e30);
-	if (abs(direction.x) > 1e-8) distance.x = (boundary.x - position.x) / direction.x;
-	if (abs(direction.y) > 1e-8) distance.y = (boundary.y - position.y) / direction.y;
-	if (abs(direction.z) > 1e-8) distance.z = (boundary.z - position.z) / direction.z;
+	if (abs(direction.x) > 1e-8) {
+		distance.x = (boundary.x - position.x) / direction.x;
+	}
+	if (abs(direction.y) > 1e-8) {
+		distance.y = (boundary.y - position.y) / direction.y;
+	}
+	if (abs(direction.z) > 1e-8) {
+		distance.z = (boundary.z - position.z) / direction.z;
+	}
 	return max(min(distance.x, min(distance.y, distance.z)), 0.0001);
 }
 
@@ -1193,7 +1199,9 @@ float voxel_occupancy_trace_local_shadow(vec3 receiver_position, vec3 direction_
 			continue;
 		}
 		if (code == 1u) {
-			if (!skipping_receiver) return 0.0;
+			if (!skipping_receiver) {
+				return 0.0;
+			}
 			float advance = voxel_occupancy_distance_to_exit(ray_position, direction_world, 8.0) + 0.001;
 			ray_position += direction_world * advance;
 			traveled += advance;
@@ -1203,7 +1211,9 @@ float voxel_occupancy_trace_local_shadow(vec3 receiver_position, vec3 direction_
 		ivec3 voxel_position = ivec3(floor(ray_position));
 		ivec3 local_voxel = voxel_position - brick_position * 8;
 		if (voxel_occupancy_mixed_brick_occupied(code, local_voxel)) {
-			if (!skipping_receiver) return 0.0;
+			if (!skipping_receiver) {
+				return 0.0;
+			}
 		} else {
 			skipping_receiver = false;
 		}
@@ -1215,13 +1225,27 @@ float voxel_occupancy_trace_local_shadow(vec3 receiver_position, vec3 direction_
 }
 
 vec2 voxel_occupancy_disk_sample(int sample_index, int sample_count) {
-	if (sample_index == 0) return vec2(-0.625, -0.250);
-	if (sample_index == 1) return vec2(0.250, -0.625);
-	if (sample_index == 2) return vec2(0.625, 0.250);
-	if (sample_index == 3) return vec2(-0.250, 0.625);
-	if (sample_index == 4) return vec2(-0.300, -0.100);
-	if (sample_index == 5) return vec2(0.100, -0.300);
-	if (sample_index == 6) return vec2(0.300, 0.100);
+	if (sample_index == 0) {
+		return vec2(-0.625, -0.250);
+	}
+	if (sample_index == 1) {
+		return vec2(0.250, -0.625);
+	}
+	if (sample_index == 2) {
+		return vec2(0.625, 0.250);
+	}
+	if (sample_index == 3) {
+		return vec2(-0.250, 0.625);
+	}
+	if (sample_index == 4) {
+		return vec2(-0.300, -0.100);
+	}
+	if (sample_index == 5) {
+		return vec2(0.100, -0.300);
+	}
+	if (sample_index == 6) {
+		return vec2(0.300, 0.100);
+	}
 	return vec2(-0.100, 0.300);
 }
 
@@ -1261,7 +1285,9 @@ float voxel_occupancy_local_shadow(vec3 receiver_view, vec3 receiver_normal_view
 	vec3 light_vector_world = direction_world * light_distance;
 	float visibility = 0.0;
 	for (int sample_index = 0; sample_index < 8; sample_index++) {
-		if (sample_index >= sample_count) break;
+		if (sample_index >= sample_count) {
+			break;
+		}
 		vec2 face_offset = voxel_occupancy_disk_sample(sample_index, sample_count) * radius_voxels;
 		float largest_axis = max(abs(face_offset.x), abs(face_offset.y));
 		if (largest_axis > 0.45) {
@@ -1274,8 +1300,12 @@ float voxel_occupancy_local_shadow(vec3 receiver_view, vec3 receiver_normal_view
 		visibility += voxel_occupancy_trace_local_shadow(sample_position, normalize(sample_vector_world), sample_distance);
 	}
 	float averaged_visibility = visibility / float(sample_count);
-	if (visibility <= 1.0) averaged_visibility = 0.0;
-	if (visibility >= float(sample_count - 1)) averaged_visibility = 1.0;
+	if (visibility <= 1.0) {
+		averaged_visibility = 0.0;
+	}
+	if (visibility >= float(sample_count - 1)) {
+		averaged_visibility = 1.0;
+	}
 	return averaged_visibility;
 }
 #endif
@@ -1599,10 +1629,10 @@ void fragment_shader(in SceneData scene_data) {
 
 	{
 #ifdef VOXEL_INV_MODEL_MATRIX_USED
-	mat4 read_inverse_model_matrix = transpose(mat4(instances.data[instance_index].inverse_transform[0],
-			instances.data[instance_index].inverse_transform[1],
-			instances.data[instance_index].inverse_transform[2],
-			vec4(0.0, 0.0, 0.0, 1.0)));
+		mat4 read_inverse_model_matrix = transpose(mat4(instances.data[instance_index].inverse_transform[0],
+				instances.data[instance_index].inverse_transform[1],
+				instances.data[instance_index].inverse_transform[2],
+				vec4(0.0, 0.0, 0.0, 1.0)));
 #endif
 #CODE : FRAGMENT
 	}
@@ -1634,7 +1664,7 @@ void fragment_shader(in SceneData scene_data) {
 	transmittance_color.a *= sss_strength;
 #endif
 
-vec3 view = view_highp;
+	vec3 view = view_highp;
 #ifdef LIGHT_VERTEX_USED
 	vertex = light_vertex;
 #endif //LIGHT_VERTEX_USED
@@ -2579,8 +2609,8 @@ vec3 view = view_highp;
 
 		// Do shadow and lighting in two passes to reduce register pressure.
 #ifndef SHADOWS_DISABLED
-		// Conventional shadow maps include dynamic mesh casters. Temporarily use
-		// the voxel face center as their receiver so the result is face-constant.
+	  // Conventional shadow maps include dynamic mesh casters. Temporarily use
+	  // the voxel face center as their receiver so the result is face-constant.
 #ifdef LIGHTING_VERTEX_USED
 		vec3 exact_shadow_receiver_vertex = vertex;
 		vertex = lighting_vertex;

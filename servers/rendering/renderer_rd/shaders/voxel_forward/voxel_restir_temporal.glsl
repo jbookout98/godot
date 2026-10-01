@@ -17,14 +17,29 @@ struct Reservoir {
 
 layout(set = 0, binding = 0) uniform sampler2D depth_buffer;
 layout(set = 0, binding = 1) uniform usampler2D voxel_hit_buffer;
-layout(set = 0, binding = 2, std430) readonly buffer TemporalHistory { Reservoir values[]; } temporal_history;
-layout(set = 0, binding = 3, std430) writeonly buffer TemporalOutput { Reservoir values[]; } temporal_output;
-layout(set = 0, binding = 4, std430) readonly buffer WorldDirectory { uvec4 entries[]; } world_directory;
-layout(set = 0, binding = 5, std430) readonly buffer MixedBricks { uint words[]; } mixed_bricks;
+layout(set = 0, binding = 2, std430) readonly buffer TemporalHistory {
+	Reservoir values[];
+}
+temporal_history;
+layout(set = 0, binding = 3, std430) writeonly buffer TemporalOutput {
+	Reservoir values[];
+}
+temporal_output;
+layout(set = 0, binding = 4, std430) readonly buffer WorldDirectory {
+	uvec4 entries[];
+}
+world_directory;
+layout(set = 0, binding = 5, std430) readonly buffer MixedBricks {
+	uint words[];
+}
+mixed_bricks;
 layout(set = 0, binding = 6) uniform sampler3D color_grid_near;
 layout(set = 0, binding = 7) uniform sampler3D color_grid_far;
 layout(set = 0, binding = 8) uniform sampler3D color_grid_distant;
-layout(set = 0, binding = 9, std430) readonly buffer DirtyBricks { ivec4 values[]; } dirty_bricks;
+layout(set = 0, binding = 9, std430) readonly buffer DirtyBricks {
+	ivec4 values[];
+}
+dirty_bricks;
 
 layout(set = 0, binding = 10, std140) uniform Params {
 	mat4 inv_view_projection;
@@ -40,7 +55,8 @@ layout(set = 0, binding = 10, std140) uniform Params {
 	ivec4 reuse;
 	vec4 limits;
 	vec4 validation;
-} params;
+}
+params;
 
 const float PI = 3.14159265358979323846;
 const uint RESERVOIR_VALID = 1u;
@@ -89,8 +105,12 @@ uint find_brick(ivec3 position) {
 	uint slot = brick_hash(position) & uint(params.trace.x);
 	for (int probe = 0; probe <= params.trace.y; probe++) {
 		uvec4 entry = world_directory.entries[slot];
-		if (entry.w == 0u) return 0u;
-		if (ivec3(entry.xyz) == position) return entry.w;
+		if (entry.w == 0u) {
+			return 0u;
+		}
+		if (ivec3(entry.xyz) == position) {
+			return entry.w;
+		}
 		slot = (slot + 1u) & uint(params.trace.x);
 	}
 	return 0u;
@@ -99,8 +119,12 @@ uint find_brick(ivec3 position) {
 bool voxel_occupied(ivec3 voxel_position) {
 	ivec3 brick_position = ivec3(floor(vec3(voxel_position) / 8.0));
 	uint code = find_brick(brick_position);
-	if (code == 0u) return false;
-	if (code == 1u) return true;
+	if (code == 0u) {
+		return false;
+	}
+	if (code == 1u) {
+		return true;
+	}
 	ivec3 local_voxel = voxel_position - brick_position * 8;
 	uint local_index = uint(local_voxel.x + local_voxel.y * 8 + local_voxel.z * 64);
 	uint word = mixed_bricks.words[(code - 2u) * 16u + (local_index >> 5u)];
@@ -120,12 +144,16 @@ bool trace_surface(vec3 start_world, vec3 direction, out vec3 hit_position, out 
 	for (int step = 0; step < 4096 && step < params.trace.z; step++) {
 		int axis = next_t.x <= next_t.y && next_t.x <= next_t.z ? 0 : (next_t.y <= next_t.z ? 1 : 2);
 		float travel_t = next_t[axis];
-		if (travel_t > maximum_t) break;
+		if (travel_t > maximum_t) {
+			break;
+		}
 		cell[axis] += step_direction[axis];
 		next_t[axis] += delta_t[axis];
 		bool occupied = voxel_occupied(cell);
 		if (occupied != previous_occupied) {
-			if (previous_occupied && !occupied) return false;
+			if (previous_occupied && !occupied) {
+				return false;
+			}
 			hit_normal = vec3(0.0);
 			hit_normal[axis] = -float(step_direction[axis]);
 			hit_distance = travel_t * params.world_origin_voxel_size.w;
@@ -138,7 +166,9 @@ bool trace_surface(vec3 start_world, vec3 direction, out vec3 hit_position, out 
 }
 
 bool trace_occluded(vec3 start_world, vec3 direction, float maximum_distance) {
-	if (maximum_distance <= params.world_origin_voxel_size.w * 0.25) return false;
+	if (maximum_distance <= params.world_origin_voxel_size.w * 0.25) {
+		return false;
+	}
 	vec3 origin = (start_world - params.world_origin_voxel_size.xyz) / params.world_origin_voxel_size.w;
 	ivec3 cell = ivec3(floor(origin));
 	ivec3 step_direction = ivec3(direction.x >= 0.0 ? 1 : -1, direction.y >= 0.0 ? 1 : -1, direction.z >= 0.0 ? 1 : -1);
@@ -150,10 +180,14 @@ bool trace_occluded(vec3 start_world, vec3 direction, float maximum_distance) {
 	for (int step = 0; step < 4096 && step < params.trace.z; step++) {
 		int axis = next_t.x <= next_t.y && next_t.x <= next_t.z ? 0 : (next_t.y <= next_t.z ? 1 : 2);
 		float travel_t = next_t[axis];
-		if (travel_t >= maximum_t) break;
+		if (travel_t >= maximum_t) {
+			break;
+		}
 		cell[axis] += step_direction[axis];
 		next_t[axis] += delta_t[axis];
-		if (voxel_occupied(cell)) return true;
+		if (voxel_occupied(cell)) {
+			return true;
+		}
 	}
 	return false;
 }
@@ -161,15 +195,23 @@ bool trace_occluded(vec3 start_world, vec3 direction, float maximum_distance) {
 vec4 sample_color_grid(sampler3D grid, int cascade, vec3 world_position) {
 	vec4 definition = params.color_grid_origin_cell_size[cascade];
 	vec3 uvw = (world_position - definition.xyz) / (definition.w * float(params.trace.w));
-	if (any(lessThan(uvw, vec3(0.0))) || any(greaterThanEqual(uvw, vec3(1.0)))) return vec4(-1.0);
+	if (any(lessThan(uvw, vec3(0.0))) || any(greaterThanEqual(uvw, vec3(1.0)))) {
+		return vec4(-1.0);
+	}
 	return textureLod(grid, uvw, 0.0);
 }
 
 vec4 sample_surface_color(vec3 world_position) {
 	vec4 color = sample_color_grid(color_grid_near, 0, world_position);
-	if (color.x < 0.0) color = sample_color_grid(color_grid_far, 1, world_position);
-	if (color.x < 0.0) color = sample_color_grid(color_grid_distant, 2, world_position);
-	if (color.x < 0.0 || color.a < 0.5) return vec4(0.7, 0.7, 0.7, 0.0);
+	if (color.x < 0.0) {
+		color = sample_color_grid(color_grid_far, 1, world_position);
+	}
+	if (color.x < 0.0) {
+		color = sample_color_grid(color_grid_distant, 2, world_position);
+	}
+	if (color.x < 0.0 || color.a < 0.5) {
+		return vec4(0.7, 0.7, 0.7, 0.0);
+	}
 	return vec4(max(color.rgb, vec3(0.0)), max(color.a * 2.0 - 1.0, 0.0));
 }
 
@@ -186,7 +228,9 @@ vec3 evaluate_outgoing_radiance(vec3 hit_position, vec3 hit_normal) {
 
 vec3 receiver_normal(uint payload) {
 	uint face_code = (payload >> 11u) & 0x7u;
-	if (face_code >= 6u) return vec3(0.0);
+	if (face_code >= 6u) {
+		return vec3(0.0);
+	}
 	vec3 normal = vec3(0.0);
 	int axis = int(face_code >> 1u);
 	normal[axis] = (face_code & 1u) != 0u ? 1.0 : -1.0;
@@ -212,12 +256,16 @@ vec3 uniform_hemisphere(vec3 normal, inout uint rng) {
 }
 
 bool point_is_dirty(vec3 world_position) {
-	if ((params.state.w & 1u) != 0u) return true;
+	if ((params.state.w & 1u) != 0u) {
+		return true;
+	}
 	ivec3 voxel_position = ivec3(floor((world_position - params.world_origin_voxel_size.xyz) / params.world_origin_voxel_size.w));
 	ivec3 brick = ivec3(floor(vec3(voxel_position) / 8.0));
 	int dirty_count = int((params.state.w >> 16u) & 0x1ffu);
 	for (int index = 0; index < dirty_count && index < 256; index++) {
-		if (all(equal(brick, dirty_bricks.values[index].xyz))) return true;
+		if (all(equal(brick, dirty_bricks.values[index].xyz))) {
+			return true;
+		}
 	}
 	return false;
 }
@@ -230,7 +278,9 @@ bool dirty_box_intersects_segment(ivec3 brick, vec3 start_position, vec3 end_pos
 	float exit = 1.0;
 	for (int axis = 0; axis < 3; axis++) {
 		if (abs(segment[axis]) <= 0.000001) {
-			if (start_position[axis] < brick_min[axis] || start_position[axis] > brick_max[axis]) return false;
+			if (start_position[axis] < brick_min[axis] || start_position[axis] > brick_max[axis]) {
+				return false;
+			}
 			continue;
 		}
 		float inverse_direction = 1.0 / segment[axis];
@@ -238,21 +288,29 @@ bool dirty_box_intersects_segment(ivec3 brick, vec3 start_position, vec3 end_pos
 		float second = (brick_max[axis] - start_position[axis]) * inverse_direction;
 		enter = max(enter, min(first, second));
 		exit = min(exit, max(first, second));
-		if (exit < enter) return false;
+		if (exit < enter) {
+			return false;
+		}
 	}
 	return true;
 }
 
 bool reservoir_path_is_dirty(Reservoir reservoir) {
-	if ((params.state.w & 1u) != 0u) return true;
+	if ((params.state.w & 1u) != 0u) {
+		return true;
+	}
 	int dirty_count = int((params.state.w >> 16u) & 0x1ffu);
-	if (dirty_count == 0) return false;
+	if (dirty_count == 0) {
+		return false;
+	}
 	vec3 sample_position = reservoir.sample_position_pdf.xyz;
 	vec3 light_end = sample_position + params.light_direction_energy.xyz * params.limits.x;
 	for (int index = 0; index < dirty_count && index < 256; index++) {
 		ivec3 brick = dirty_bricks.values[index].xyz;
 		if (dirty_box_intersects_segment(brick, reservoir.visible_position_valid.xyz, sample_position) ||
-				dirty_box_intersects_segment(brick, sample_position, light_end)) return true;
+				dirty_box_intersects_segment(brick, sample_position, light_end)) {
+			return true;
+		}
 	}
 	return false;
 }
@@ -269,10 +327,14 @@ Reservoir empty_reservoir() {
 }
 
 void update_reservoir(inout Reservoir reservoir, Reservoir candidate, float candidate_weight, uint candidate_count, inout uint rng) {
-	if (!finite_float(candidate_weight) || candidate_weight <= 0.0 || candidate_count == 0u) return;
+	if (!finite_float(candidate_weight) || candidate_weight <= 0.0 || candidate_count == 0u) {
+		return;
+	}
 	uint remaining = uint(params.reuse.z) > reservoir.metadata.x ? uint(params.reuse.z) - reservoir.metadata.x : 0u;
 	uint accepted_count = min(candidate_count, remaining);
-	if (accepted_count == 0u) return;
+	if (accepted_count == 0u) {
+		return;
+	}
 	candidate_weight *= float(accepted_count) / float(candidate_count);
 	float previous_sum = reservoir.sample_radiance_weight_sum.w;
 	float next_sum = min(previous_sum + candidate_weight, 1e30);
@@ -289,7 +351,9 @@ void update_reservoir(inout Reservoir reservoir, Reservoir candidate, float cand
 
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-	if (any(greaterThanEqual(pixel, params.screen.xy))) return;
+	if (any(greaterThanEqual(pixel, params.screen.xy))) {
+		return;
+	}
 	uint output_index = uint(pixel.x + pixel.y * params.screen.x);
 	ivec2 depth_pixel = clamp(ivec2((vec2(pixel) + vec2(0.5)) * vec2(params.screen.zw) / vec2(params.screen.xy)), ivec2(0), params.screen.zw - 1);
 	float depth = texelFetch(depth_buffer, depth_pixel, 0).r;

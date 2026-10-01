@@ -27,12 +27,30 @@ struct LocalLight {
 	vec4 attenuation_source_size;
 };
 
-layout(set = 0, binding = 0, std430) writeonly buffer Surfels { Surfel values[]; } surfels;
-layout(set = 0, binding = 1, std430) readonly buffer ActiveProbeIndices { uint values[]; } active_probe_indices;
-layout(set = 0, binding = 2, std430) readonly buffer ProbeRecords { ProbeRecord values[]; } probe_records;
-layout(set = 0, binding = 3, std430) readonly buffer ProbeCounters { uint values[6]; } probe_counters;
-layout(set = 0, binding = 4, std430) readonly buffer WorldDirectory { uvec4 entries[]; } world_directory;
-layout(set = 0, binding = 5, std430) readonly buffer MixedBricks { uint words[]; } mixed_bricks;
+layout(set = 0, binding = 0, std430) writeonly buffer Surfels {
+	Surfel values[];
+}
+surfels;
+layout(set = 0, binding = 1, std430) readonly buffer ActiveProbeIndices {
+	uint values[];
+}
+active_probe_indices;
+layout(set = 0, binding = 2, std430) readonly buffer ProbeRecords {
+	ProbeRecord values[];
+}
+probe_records;
+layout(set = 0, binding = 3, std430) readonly buffer ProbeCounters {
+	uint values[6];
+}
+probe_counters;
+layout(set = 0, binding = 4, std430) readonly buffer WorldDirectory {
+	uvec4 entries[];
+}
+world_directory;
+layout(set = 0, binding = 5, std430) readonly buffer MixedBricks {
+	uint words[];
+}
+mixed_bricks;
 layout(set = 0, binding = 6) uniform sampler3D color_grid;
 layout(set = 0, binding = 7) uniform sampler2D shadow_atlas;
 layout(set = 0, binding = 8) uniform sampler2D irradiance_history_lod0;
@@ -47,7 +65,10 @@ layout(set = 0, binding = 16) uniform sampler2D probe_metadata_lod2;
 layout(set = 0, binding = 17) uniform sampler2D irradiance_history_lod3;
 layout(set = 0, binding = 18) uniform sampler2D visibility_history_lod3;
 layout(set = 0, binding = 19) uniform sampler2D probe_metadata_lod3;
-layout(set = 0, binding = 26, std430) readonly buffer LocalLights { LocalLight values[]; } local_lights;
+layout(set = 0, binding = 26, std430) readonly buffer LocalLights {
+	LocalLight values[];
+}
+local_lights;
 
 #ifdef USE_RADIANCE_OCTMAP_ARRAY
 layout(set = 0, binding = 21) uniform sampler2DArray sky_radiance;
@@ -82,7 +103,8 @@ layout(set = 0, binding = 20, std140) uniform Params {
 	vec4 cascade_cell_size[4];
 	ivec4 cascade_logical_origin[4];
 	uvec4 local_light_state;
-} params;
+}
+params;
 
 #include "voxel_dynamic_trace_inc.glsl"
 
@@ -104,8 +126,12 @@ uint find_brick(ivec3 position) {
 	uint slot = brick_hash(position) & uint(params.directory_trace.x);
 	for (int probe = 0; probe <= params.directory_trace.y; probe++) {
 		uvec4 entry = world_directory.entries[slot];
-		if (entry.w == 0u) return 0u;
-		if (ivec3(entry.xyz) == position) return entry.w;
+		if (entry.w == 0u) {
+			return 0u;
+		}
+		if (ivec3(entry.xyz) == position) {
+			return entry.w;
+		}
 		slot = (slot + 1u) & uint(params.directory_trace.x);
 	}
 	return 0u;
@@ -114,8 +140,12 @@ uint find_brick(ivec3 position) {
 bool voxel_occupied(ivec3 voxel_position) {
 	ivec3 brick_position = ivec3(floor(vec3(voxel_position) / 8.0));
 	uint code = find_brick(brick_position);
-	if (code == 0u) return false;
-	if (code == 1u) return true;
+	if (code == 0u) {
+		return false;
+	}
+	if (code == 1u) {
+		return true;
+	}
 	ivec3 local_voxel = voxel_position - brick_position * 8;
 	uint local_index = uint(local_voxel.x + local_voxel.y * 8 + local_voxel.z * 64);
 	uint word = mixed_bricks.words[(code - 2u) * 16u + (local_index >> 5u)];
@@ -144,7 +174,9 @@ vec3 fibonacci_direction(uint ray_index, uint ray_count, ivec4 logical_cell_lod,
 vec2 oct_encode(vec3 direction) {
 	direction /= max(abs(direction.x) + abs(direction.y) + abs(direction.z), 0.00001);
 	vec2 encoded = direction.xz;
-	if (direction.y < 0.0) encoded = (1.0 - abs(encoded.yx)) * sign(encoded.xy);
+	if (direction.y < 0.0) {
+		encoded = (1.0 - abs(encoded.yx)) * sign(encoded.xy);
+	}
 	return encoded * 0.5 + 0.5;
 }
 
@@ -171,9 +203,15 @@ ivec2 probe_tile(uint probe_index) {
 }
 
 vec4 ddgi_fetch_metadata(int lod, ivec2 pixel) {
-	if (lod == 0) return texelFetch(probe_metadata_lod0, pixel, 0);
-	if (lod == 1) return texelFetch(probe_metadata_lod1, pixel, 0);
-	if (lod == 2) return texelFetch(probe_metadata_lod2, pixel, 0);
+	if (lod == 0) {
+		return texelFetch(probe_metadata_lod0, pixel, 0);
+	}
+	if (lod == 1) {
+		return texelFetch(probe_metadata_lod1, pixel, 0);
+	}
+	if (lod == 2) {
+		return texelFetch(probe_metadata_lod2, pixel, 0);
+	}
 	return texelFetch(probe_metadata_lod3, pixel, 0);
 }
 
@@ -196,16 +234,28 @@ bool ddgi_metadata_usable(float packed_value, ivec4 expected_logical_cell_lod) {
 }
 
 vec4 ddgi_sample_visibility(int lod, vec2 uv) {
-	if (lod == 0) return textureLod(visibility_history_lod0, uv, 0.0);
-	if (lod == 1) return textureLod(visibility_history_lod1, uv, 0.0);
-	if (lod == 2) return textureLod(visibility_history_lod2, uv, 0.0);
+	if (lod == 0) {
+		return textureLod(visibility_history_lod0, uv, 0.0);
+	}
+	if (lod == 1) {
+		return textureLod(visibility_history_lod1, uv, 0.0);
+	}
+	if (lod == 2) {
+		return textureLod(visibility_history_lod2, uv, 0.0);
+	}
 	return textureLod(visibility_history_lod3, uv, 0.0);
 }
 
 vec4 ddgi_sample_irradiance(int lod, vec2 uv) {
-	if (lod == 0) return textureLod(irradiance_history_lod0, uv, 0.0);
-	if (lod == 1) return textureLod(irradiance_history_lod1, uv, 0.0);
-	if (lod == 2) return textureLod(irradiance_history_lod2, uv, 0.0);
+	if (lod == 0) {
+		return textureLod(irradiance_history_lod0, uv, 0.0);
+	}
+	if (lod == 1) {
+		return textureLod(irradiance_history_lod1, uv, 0.0);
+	}
+	if (lod == 2) {
+		return textureLod(irradiance_history_lod2, uv, 0.0);
+	}
 	return textureLod(irradiance_history_lod3, uv, 0.0);
 }
 
@@ -236,7 +286,9 @@ vec3 ddgi_sample_previous_lod(int lod, vec3 world_position, vec3 normal, vec3 vi
 		for (int y = 0; y < 2; y++) {
 			for (int x = 0; x < 2; x++) {
 				ivec3 local_probe = base + ivec3(x, y, z);
-				if (any(lessThan(local_probe, ivec3(0))) || any(greaterThanEqual(local_probe, ivec3(resolution)))) continue;
+				if (any(lessThan(local_probe, ivec3(0))) || any(greaterThanEqual(local_probe, ivec3(resolution)))) {
+					continue;
+				}
 				ivec3 logical_cell = params.cascade_logical_origin[lod].xyz + local_probe;
 				ivec3 physical = ivec3((logical_cell.x % resolution + resolution) % resolution, (logical_cell.y % resolution + resolution) % resolution, (logical_cell.z % resolution + resolution) % resolution);
 				uint index = uint(physical.x + physical.y * resolution + physical.z * resolution * resolution);
@@ -264,7 +316,9 @@ vec3 ddgi_sample_previous_lod(int lod, vec3 world_position, vec3 normal, vec3 vi
 				vec4 moments = ddgi_sample_visibility(lod, visibility_pixel / vec2(params.visibility_layout.yz));
 				vec2 irradiance_pixel = vec2(tile * params.atlas_layout.x) + vec2(1.5) + oct_encode(normal) * float(params.atlas_layout.w - 1);
 				vec4 irradiance = ddgi_sample_irradiance(lod, irradiance_pixel / vec2(params.atlas_layout.yz));
-				if (irradiance.a <= 0.0 || moments.a <= 0.0 || moments.x <= 0.0) continue;
+				if (irradiance.a <= 0.0 || moments.a <= 0.0 || moments.x <= 0.0) {
+					continue;
+				}
 				float confidence = min(irradiance.a, moments.a);
 				initialized_weight_sum += trilinear * confidence;
 				float visibility_bias_distance = length(bias);
@@ -292,7 +346,8 @@ vec3 ddgi_sample_previous_lod(int lod, vec3 world_position, vec3 normal, vec3 vi
 	vec3 probe_local = (biased_position - params.cascade_origin[lod].xyz) / cell_size;
 	float transition_cells = max(params.camera_position_lod_transition.w * float(resolution), 0.25);
 	vec3 outside_cells = max(max(vec3(0.5) - probe_local,
-			probe_local - vec3(float(resolution) - 0.5)), vec3(0.0));
+									 probe_local - vec3(float(resolution) - 0.5)),
+			vec3(0.0));
 	float outside_distance = max(outside_cells.x, max(outside_cells.y, outside_cells.z));
 	edge_weight = 1.0 - smoothstep(0.0, transition_cells, outside_distance);
 	return weight_sum > 0.00001 ? ddgi_finish_interpolation(sqrt_linear_sum / weight_sum) : vec3(0.0);
@@ -302,7 +357,9 @@ vec3 sample_previous_irradiance(vec3 world_position, vec3 normal, vec3 view_dire
 	vec3 result = vec3(0.0);
 	float remaining = 1.0;
 	for (int lod = 0; lod < 4 && remaining > 0.001; lod++) {
-		if (!ddgi_cascade_contains(lod, world_position)) continue;
+		if (!ddgi_cascade_contains(lod, world_position)) {
+			continue;
+		}
 		float edge_weight;
 		float support;
 		vec3 value = ddgi_sample_previous_lod(lod, world_position, normal, view_direction, edge_weight, support);
@@ -339,11 +396,15 @@ float shadow_visibility(vec3 world_position) {
 	float extent = edge_distance <= near_extent ? near_extent : far_extent;
 	int resolution = int(params.atlas_center_resolution.w);
 	ivec2 texel = ivec2(clamp((vec2(light_x, light_y) / (2.0 * extent) + vec2(0.5)) * float(resolution), vec2(0.0), vec2(float(resolution - 1))));
-	if (extent > near_extent) texel.x += resolution;
+	if (extent > near_extent) {
+		texel.x += resolution;
+	}
 	float receiver_depth = far_extent - dot(relative, params.light_direction_energy.xyz);
 	float occluder_depth = texelFetch(shadow_atlas, texel, 0).r;
 	float atlas_visibility = receiver_depth <= occluder_depth + params.world_origin_voxel_size.w ? 1.0 : 0.0;
-	if (atlas_visibility <= 0.0 || dynamic_voxel_volumes.state.x == 0u) return atlas_visibility;
+	if (atlas_visibility <= 0.0 || dynamic_voxel_volumes.state.x == 0u) {
+		return atlas_visibility;
+	}
 	// The directional atlas owns static world occupancy. Moving/rotated voxel
 	// bodies are not baked into it, so test only that bounded dynamic BVH here.
 	vec3 dynamic_hit_position;
@@ -379,7 +440,9 @@ bool trace_static_voxels(vec3 start_world, vec3 direction, out vec3 hit_position
 	for (int step = 0; step < 4096 && step < params.directory_trace.z; step++) {
 		int axis = next_t.x <= next_t.y && next_t.x <= next_t.z ? 0 : (next_t.y <= next_t.z ? 1 : 2);
 		float travel_t = next_t[axis];
-		if (travel_t > max_t) break;
+		if (travel_t > max_t) {
+			break;
+		}
 		cell[axis] += step_direction[axis];
 		next_t[axis] += delta_t[axis];
 		bool occupied = voxel_occupied(cell);
@@ -422,14 +485,20 @@ float local_light_attenuation(float distance_to_light, float range, float decay)
 vec3 local_light_candidate(LocalLight light, vec3 source_position, vec3 hit_normal) {
 	vec3 to_light = light.position_range.xyz - source_position;
 	float distance_to_light = length(to_light);
-	if (distance_to_light <= 0.00001 || distance_to_light >= light.position_range.w) return vec3(0.0);
+	if (distance_to_light <= 0.00001 || distance_to_light >= light.position_range.w) {
+		return vec3(0.0);
+	}
 	vec3 light_direction = to_light / distance_to_light;
 	float facing = max(dot(hit_normal, light_direction), 0.0);
-	if (facing <= 0.0) return vec3(0.0);
+	if (facing <= 0.0) {
+		return vec3(0.0);
+	}
 	// Area lights use a bounded center-sample approximation and preserve their
 	// one-sided emission. Their exact dimensions remain available in zw for a
 	// future multi-sample quality mode without changing this typed layout.
-	if (light.direction_type.w > 1.5 && dot(light.direction_type.xyz, -light_direction) <= 0.0) return vec3(0.0);
+	if (light.direction_type.w > 1.5 && dot(light.direction_type.xyz, -light_direction) <= 0.0) {
+		return vec3(0.0);
+	}
 	float attenuation = local_light_attenuation(distance_to_light, light.position_range.w, light.attenuation_source_size.x);
 	return light.color_energy.rgb * (light.color_energy.w * facing * attenuation);
 }
@@ -445,18 +514,24 @@ vec3 evaluate_local_lights(vec3 source_position, vec3 hit_normal, float selectio
 	for (uint light_index = 0u; light_index < params.local_light_state.x; light_index++) {
 		vec3 candidate = local_light_candidate(local_lights.values[light_index], source_position, hit_normal);
 		float weight = dot(candidate, vec3(0.2126, 0.7152, 0.0722));
-		if (weight <= 0.000001) continue;
+		if (weight <= 0.000001) {
+			continue;
+		}
 		total_weight += weight;
 		candidate_count++;
 	}
-	if (candidate_count == 0u || total_weight <= 0.000001) return vec3(0.0);
+	if (candidate_count == 0u || total_weight <= 0.000001) {
+		return vec3(0.0);
+	}
 	float target = clamp(selection_noise, 0.0, 0.999999) * total_weight;
 	float accumulated = 0.0;
 	float selected_weight = 0.0;
 	for (uint light_index = 0u; light_index < params.local_light_state.x; light_index++) {
 		vec3 candidate = local_light_candidate(local_lights.values[light_index], source_position, hit_normal);
 		float weight = dot(candidate, vec3(0.2126, 0.7152, 0.0722));
-		if (weight <= 0.000001) continue;
+		if (weight <= 0.000001) {
+			continue;
+		}
 		accumulated += weight;
 		if (accumulated >= target) {
 			selected_index = light_index;
@@ -518,7 +593,9 @@ void main() {
 	uint invocation = gl_GlobalInvocationID.x;
 	uint ray_stride = uint(params.probe_grid.y);
 	uint update_count = scheduled_probe_count();
-	if (invocation >= ray_stride * update_count) return;
+	if (invocation >= ray_stride * update_count) {
+		return;
+	}
 	uint update_index = invocation / ray_stride;
 	uint ray_index = invocation - update_index * ray_stride;
 	uint probe_index = active_probe_indices.values[scheduled_probe_list_index(update_index)];
@@ -526,7 +603,9 @@ void main() {
 	uint state = record.state_revision_frame_flags.x;
 	bool converging = state == 2u || state == 3u || state == 6u || state == 7u;
 	uint ray_count = converging ? uint(params.update_state.y) : uint(params.update_state.x);
-	if (ray_index >= ray_count) return;
+	if (ray_index >= ray_count) {
+		return;
+	}
 	vec3 probe_position = record.physical_position_valid.xyz;
 	// Rotation follows this stable logical probe's own update generation. Global
 	// frame time made the sampling history depend on the path taken by the camera.

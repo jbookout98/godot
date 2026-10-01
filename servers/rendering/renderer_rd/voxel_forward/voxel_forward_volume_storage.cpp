@@ -3,6 +3,29 @@
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
 /**************************************************************************/
 
 #include "voxel_forward_volume_storage.h"
@@ -12,8 +35,8 @@
 #include "core/profiling/profiling.h"
 #include "servers/rendering/rendering_device.h"
 
-#include <cstdint>
 #include <cfloat>
+#include <cstdint>
 #include <cstring>
 
 namespace RendererSceneRenderImplementation {
@@ -48,8 +71,12 @@ struct GridAlignedVolumeTransform {
 
 struct Vector3iLexicographicLess {
 	_FORCE_INLINE_ bool operator()(const Vector3i &p_a, const Vector3i &p_b) const {
-		if (p_a.x != p_b.x) return p_a.x < p_b.x;
-		if (p_a.y != p_b.y) return p_a.y < p_b.y;
+		if (p_a.x != p_b.x) {
+			return p_a.x < p_b.x;
+		}
+		if (p_a.y != p_b.y) {
+			return p_a.y < p_b.y;
+		}
 		return p_a.z < p_b.z;
 	}
 };
@@ -420,9 +447,15 @@ struct DdgiPagePriorityLess {
 		// world origin first. Ties remain deterministic and camera-independent.
 		const int64_t distance_a = p_a.length_squared();
 		const int64_t distance_b = p_b.length_squared();
-		if (distance_a != distance_b) return distance_a > distance_b;
-		if (p_a.x != p_b.x) return p_a.x > p_b.x;
-		if (p_a.y != p_b.y) return p_a.y > p_b.y;
+		if (distance_a != distance_b) {
+			return distance_a > distance_b;
+		}
+		if (p_a.x != p_b.x) {
+			return p_a.x > p_b.x;
+		}
+		if (p_a.y != p_b.y) {
+			return p_a.y > p_b.y;
+		}
 		return p_a.z > p_b.z;
 	}
 };
@@ -571,7 +604,6 @@ VoxelForwardVolumeStorage::DdgiProbePlacement _ddgi_relocate_probe_bounded(const
 	placement.position = p_world_origin + position * p_voxel_size;
 	return placement;
 }
-
 
 Error _update_changed_buffer_units(RD *p_rd, RID p_buffer, const PackedByteArray &p_previous, const PackedByteArray &p_current, int p_unit_size) {
 	ERR_FAIL_NULL_V(p_rd, ERR_INVALID_PARAMETER);
@@ -997,7 +1029,9 @@ bool VoxelForwardVolumeStorage::_queue_incremental_volume_change(const Volume &p
 	if (!_get_aligned_volume_transform(p_current, world_occupancy.voxel_size, world_occupancy.origin, grid_transform)) {
 		return false;
 	}
-	if (p_previous.revision == p_current.revision) return true;
+	if (p_previous.revision == p_current.revision) {
+		return true;
+	}
 
 	Vector3i first_local_brick;
 	Vector3i last_local_brick = p_current.brick_dimensions - Vector3i(1, 1, 1);
@@ -1460,9 +1494,13 @@ void VoxelForwardVolumeStorage::_publish_ddgi_page_seeds(const HashMap<Vector3i,
 		ddgi_page_seeds[lod] = p_seeds[lod];
 		Vector<Vector3i> stale_pages;
 		for (const KeyValue<Vector3i, DdgiPlacementPage> &page : ddgi_placement_pages[lod]) {
-			if (!ddgi_page_seeds[lod].has(page.key)) stale_pages.push_back(page.key);
+			if (!ddgi_page_seeds[lod].has(page.key)) {
+				stale_pages.push_back(page.key);
+			}
 		}
-		for (const Vector3i &page_coordinate : stale_pages) ddgi_placement_pages[lod].erase(page_coordinate);
+		for (const Vector3i &page_coordinate : stale_pages) {
+			ddgi_placement_pages[lod].erase(page_coordinate);
+		}
 		world_occupancy.ddgi_cached_probe_count[lod] = 0;
 		for (const KeyValue<Vector3i, DdgiPlacementPage> &page : ddgi_placement_pages[lod]) {
 			world_occupancy.ddgi_cached_probe_count[lod] += _ddgi_mask_bit_count(page.value.relevant_mask);
@@ -1632,8 +1670,8 @@ void VoxelForwardVolumeStorage::volume_set_on_render_thread(RID p_scenario, RID 
 	if (storage == nullptr || !p_base.is_valid()) {
 		return;
 	}
- singleton->base_scenarios.insert(p_base, p_scenario);
- storage = singleton->get_scenario_storage(p_scenario);
+	singleton->base_scenarios.insert(p_base, p_scenario);
+	storage = singleton->get_scenario_storage(p_scenario);
 
 	if (p_occupancy_directory.is_empty()) {
 		return;
@@ -1726,9 +1764,7 @@ void VoxelForwardVolumeStorage::volume_set_on_render_thread(RID p_scenario, RID 
 	const bool dynamic_only_change = (!volume.casts_shadow && (previous_volume == nullptr || !previous_volume->casts_shadow)) ||
 			(storage->world_occupancy.voxel_size > 0.0f && !storage->_is_volume_in_world_occupancy(volume) &&
 					(previous_volume == nullptr || !storage->_is_volume_in_world_occupancy(*previous_volume)));
-	const bool incremental_change = dynamic_only_change || (previous_volume != nullptr ?
-			storage->_queue_incremental_volume_change(*previous_volume, volume, p_dirty_position, p_dirty_size) :
-			storage->_queue_incremental_volume_extent(volume));
+	const bool incremental_change = dynamic_only_change || (previous_volume != nullptr ? storage->_queue_incremental_volume_change(*previous_volume, volume, p_dirty_position, p_dirty_size) : storage->_queue_incremental_volume_extent(volume));
 	const bool spatial_extent_changed = previous_volume == nullptr || previous_volume->casts_shadow != volume.casts_shadow || previous_volume->transform != volume.transform ||
 			previous_volume->dimensions != volume.dimensions || !Math::is_equal_approx(previous_volume->voxel_size, volume.voxel_size);
 	if (spatial_extent_changed && storage->world_volume_spatial_index_valid) {
@@ -1758,9 +1794,11 @@ void VoxelForwardVolumeStorage::volume_set_on_render_thread(RID p_scenario, RID 
 
 void VoxelForwardVolumeStorage::volume_neighbors_set_on_render_thread(RID p_base, RID p_neighbor_texture, int p_neighbor_mask, int p_neighbor_diagonal_mask) {
 	VoxelForwardVolumeStorage *storage = get_singleton();
- if (!storage || !storage->base_scenarios.has(p_base)) return;
- RID scenario = storage->base_scenarios[p_base];
- storage = storage->get_scenario_storage(scenario);
+	if (!storage || !storage->base_scenarios.has(p_base)) {
+		return;
+	}
+	RID scenario = storage->base_scenarios[p_base];
+	storage = storage->get_scenario_storage(scenario);
 	if (storage == nullptr) {
 		return;
 	}
@@ -1782,9 +1820,11 @@ void VoxelForwardVolumeStorage::volume_neighbors_set_on_render_thread(RID p_base
 
 void VoxelForwardVolumeStorage::volume_transform_set_on_render_thread(RID p_base, Transform3D p_transform) {
 	VoxelForwardVolumeStorage *storage = get_singleton();
- if (!storage || !storage->base_scenarios.has(p_base)) return;
- RID scenario = storage->base_scenarios[p_base];
- storage = storage->get_scenario_storage(scenario);
+	if (!storage || !storage->base_scenarios.has(p_base)) {
+		return;
+	}
+	RID scenario = storage->base_scenarios[p_base];
+	storage = storage->get_scenario_storage(scenario);
 	if (storage == nullptr) {
 		return;
 	}
@@ -1820,12 +1860,14 @@ void VoxelForwardVolumeStorage::volume_transform_set_on_render_thread(RID p_base
 
 void VoxelForwardVolumeStorage::volume_remove_on_render_thread(RID p_base) {
 	VoxelForwardVolumeStorage *storage = get_singleton();
- if (!storage || !storage->base_scenarios.has(p_base)) return;
- RID scenario = storage->base_scenarios[p_base];
- storage->base_scenarios.erase(p_base);
- storage = storage->get_scenario_storage(scenario);
+	if (!storage || !storage->base_scenarios.has(p_base)) {
+		return;
+	}
+	RID scenario = storage->base_scenarios[p_base];
+	storage->base_scenarios.erase(p_base);
+	storage = storage->get_scenario_storage(scenario);
 	if (storage != nullptr) {
-	const Volume *previous_volume = storage->volumes.getptr(p_base);
+		const Volume *previous_volume = storage->volumes.getptr(p_base);
 		if (previous_volume == nullptr) {
 			return;
 		}
@@ -2347,9 +2389,11 @@ void VoxelForwardVolumeStorage::prioritize_queued_ddgi_pages_for_world_load(cons
 }
 
 VoxelForwardVolumeStorage::VoxelForwardVolumeStorage(bool p_registry) {
- registry = p_registry;
+	registry = p_registry;
 	ERR_FAIL_COND(registry && singleton != nullptr);
-	if (registry) singleton = this;
+	if (registry) {
+		singleton = this;
+	}
 	batch_voxel_textures.resize(MAX_BATCH_TEXTURES);
 	batch_brick_textures.resize(MAX_BATCH_TEXTURES);
 	batch_neighbor_textures.resize(MAX_BATCH_TEXTURES);
@@ -2360,22 +2404,34 @@ VoxelForwardVolumeStorage::VoxelForwardVolumeStorage(bool p_registry) {
 }
 
 void VoxelForwardVolumeStorage::free_scenario_storage(RID p_scenario) {
- if (!scenario_stores.has(p_scenario)) return;
- Vector<RID> removed;
- for (const KeyValue<RID,RID> &entry:base_scenarios) if (entry.value==p_scenario) removed.push_back(entry.key);
- for (RID base:removed) base_scenarios.erase(base);
- memdelete(scenario_stores[p_scenario]);
- scenario_stores.erase(p_scenario);
+	if (!scenario_stores.has(p_scenario)) {
+		return;
+	}
+	Vector<RID> removed;
+	for (const KeyValue<RID, RID> &entry : base_scenarios) {
+		if (entry.value == p_scenario) {
+			removed.push_back(entry.key);
+		}
+	}
+	for (RID base : removed) {
+		base_scenarios.erase(base);
+	}
+	memdelete(scenario_stores[p_scenario]);
+	scenario_stores.erase(p_scenario);
 }
 
 VoxelForwardVolumeStorage *VoxelForwardVolumeStorage::get_scenario_storage(RID p_scenario) {
- if (!scenario_stores.has(p_scenario)) scenario_stores.insert(p_scenario, memnew(VoxelForwardVolumeStorage(false)));
- return scenario_stores[p_scenario];
+	if (!scenario_stores.has(p_scenario)) {
+		scenario_stores.insert(p_scenario, memnew(VoxelForwardVolumeStorage(false)));
+	}
+	return scenario_stores[p_scenario];
 }
 
 VoxelForwardVolumeStorage::~VoxelForwardVolumeStorage() {
- for (const KeyValue<RID, VoxelForwardVolumeStorage *> &entry : scenario_stores) memdelete(entry.value);
- scenario_stores.clear();
+	for (const KeyValue<RID, VoxelForwardVolumeStorage *> &entry : scenario_stores) {
+		memdelete(entry.value);
+	}
+	scenario_stores.clear();
 	if (world_occupancy_build_task != WorkerThreadPool::INVALID_TASK_ID) {
 		WorkerThreadPool::get_singleton()->wait_for_task_completion(world_occupancy_build_task);
 		world_occupancy_build_task = WorkerThreadPool::INVALID_TASK_ID;

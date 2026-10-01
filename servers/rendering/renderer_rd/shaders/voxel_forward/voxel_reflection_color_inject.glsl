@@ -73,9 +73,15 @@ void main() {
 	// Dedicated grayscale maps use the same conventions as visible voxel
 	// shading: white means non-metallic/no emission, and red directly stores
 	// roughness for the inverted-specularity map.
-	if ((channel_flags & 2) != 0) material.g = 1.0 - texelFetch(metallic_texture, palette_texel, 0).r;
-	if ((channel_flags & 4) != 0) material.r = texelFetch(specularity_texture, palette_texel, 0).r;
-	if ((channel_flags & 8) != 0) material.b = 1.0 - texelFetch(emission_texture, palette_texel, 0).r;
+	if ((channel_flags & 2) != 0) {
+		material.g = 1.0 - texelFetch(metallic_texture, palette_texel, 0).r;
+	}
+	if ((channel_flags & 4) != 0) {
+		material.r = texelFetch(specularity_texture, palette_texel, 0).r;
+	}
+	if ((channel_flags & 8) != 0) {
+		material.b = 1.0 - texelFetch(emission_texture, palette_texel, 0).r;
+	}
 	// Authored transparency lookups are inverted grayscale: white is opaque
 	// and black is fully transmissive. Pack physical transparency in alpha.
 	material.a = (channel_flags & 1) != 0 ? 1.0 - texelFetch(transparency_texture, palette_texel, 0).r : 0.0;

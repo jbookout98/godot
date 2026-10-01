@@ -35,7 +35,8 @@ layout(set = 0, binding = 15, std140) uniform Params {
 	vec4 atlas_sizes;
 	vec4 tuning;
 	ivec4 screen_resolution_debug;
-} params;
+}
+params;
 
 shared uvec4 face_keys[64];
 shared vec4 face_results[64];
@@ -203,7 +204,8 @@ vec3 lod_sample(sampler2D irradiance_atlas, sampler2D visibility_atlas, sampler2
 	vec3 probe_local = (biased_position - origin) / cell_size;
 	float transition_cells = max(params.tuning.z * float(resolution), 0.25);
 	vec3 outside_cells = max(max(vec3(0.5) - probe_local,
-			probe_local - vec3(float(resolution) - 0.5)), vec3(0.0));
+									 probe_local - vec3(float(resolution) - 0.5)),
+			vec3(0.0));
 	float outside_distance = max(outside_cells.x, max(outside_cells.y, outside_cells.z));
 	edge_weight = 1.0 - smoothstep(0.0, transition_cells, outside_distance);
 	initialized_support = clamp(initialized_support, 0.0, 1.0);
@@ -222,9 +224,15 @@ bool lod_contains(int lod, vec3 world_position) {
 
 vec3 sample_lod_index(int lod, vec3 world_position, vec3 world_normal, vec3 view_direction,
 		out float edge, out float support, out float visibility, out float in_front) {
-	if (lod == 0) return lod_sample(irradiance_lod0, visibility_lod0, metadata_lod0, lod, world_position, world_normal, view_direction, edge, support, visibility, in_front);
-	if (lod == 1) return lod_sample(irradiance_lod1, visibility_lod1, metadata_lod1, lod, world_position, world_normal, view_direction, edge, support, visibility, in_front);
-	if (lod == 2) return lod_sample(irradiance_lod2, visibility_lod2, metadata_lod2, lod, world_position, world_normal, view_direction, edge, support, visibility, in_front);
+	if (lod == 0) {
+		return lod_sample(irradiance_lod0, visibility_lod0, metadata_lod0, lod, world_position, world_normal, view_direction, edge, support, visibility, in_front);
+	}
+	if (lod == 1) {
+		return lod_sample(irradiance_lod1, visibility_lod1, metadata_lod1, lod, world_position, world_normal, view_direction, edge, support, visibility, in_front);
+	}
+	if (lod == 2) {
+		return lod_sample(irradiance_lod2, visibility_lod2, metadata_lod2, lod, world_position, world_normal, view_direction, edge, support, visibility, in_front);
+	}
 	return lod_sample(irradiance_lod3, visibility_lod3, metadata_lod3, lod, world_position, world_normal, view_direction, edge, support, visibility, in_front);
 }
 
@@ -237,7 +245,9 @@ vec4 gather_ddgi(vec3 world_position, vec3 world_normal, out float visibility, o
 	float lod_sum = 0.0;
 	vec3 view_direction = normalize(params.camera_irradiance_size.xyz - world_position);
 	for (int lod = 0; lod < 4 && remaining > 0.001; lod++) {
-		if (!lod_contains(lod, world_position)) continue;
+		if (!lod_contains(lod, world_position)) {
+			continue;
+		}
 		float edge;
 		float local_support;
 		float local_visibility;
@@ -260,7 +270,9 @@ vec4 gather_ddgi(vec3 world_position, vec3 world_normal, out float visibility, o
 }
 
 vec4 resolve_face(ivec2 pixel, vec4 face_data, uint payload) {
-	if (payload == 0u || face_data.w < 1.0) return vec4(0.0);
+	if (payload == 0u || face_data.w < 1.0) {
+		return vec4(0.0);
+	}
 	vec3 world_position = face_data.xyz;
 	vec3 world_normal = decode_face_normal(face_data.w);
 	float visibility;
@@ -268,16 +280,24 @@ vec4 resolve_face(ivec2 pixel, vec4 face_data, uint payload) {
 	float in_front;
 	vec4 gathered = gather_ddgi(world_position, world_normal, visibility, selected_lod, in_front);
 	int debug_mode = params.screen_resolution_debug.w;
-	if (debug_mode == 13) return vec4(vec3(visibility), gathered.a);
+	if (debug_mode == 13) {
+		return vec4(vec3(visibility), gathered.a);
+	}
 	if (debug_mode == 14) {
 		vec3 lod_colors[4] = vec3[4](vec3(0.05, 0.9, 1.0), vec3(0.1, 1.0, 0.25), vec3(1.0, 0.5, 0.05), vec3(1.0, 0.1, 0.85));
 		float visual_lod = clamp(selected_lod, 0.0, 3.0);
 		int lower_lod = int(floor(visual_lod));
 		return vec4(mix(lod_colors[lower_lod], lod_colors[min(lower_lod + 1, 3)], fract(visual_lod)), gathered.a);
 	}
-	if (debug_mode == 16) return vec4(vec3(gathered.a), gathered.a);
-	if (debug_mode == 17) return vec4(vec3(in_front), gathered.a);
-	if (debug_mode == 18) return vec4(vec3(in_front > 0.0001 ? clamp(visibility / in_front, 0.0, 1.0) : 0.0), gathered.a);
+	if (debug_mode == 16) {
+		return vec4(vec3(gathered.a), gathered.a);
+	}
+	if (debug_mode == 17) {
+		return vec4(vec3(in_front), gathered.a);
+	}
+	if (debug_mode == 18) {
+		return vec4(vec3(in_front > 0.0001 ? clamp(visibility / in_front, 0.0, 1.0) : 0.0), gathered.a);
+	}
 	return gathered;
 }
 

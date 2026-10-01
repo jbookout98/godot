@@ -60,13 +60,27 @@ vec3 decode_face_normal(float packed_float) {
 }
 
 vec2 disk_sample(int index) {
-	if (index == 0) return vec2(-0.625, -0.250);
-	if (index == 1) return vec2(0.250, -0.625);
-	if (index == 2) return vec2(0.625, 0.250);
-	if (index == 3) return vec2(-0.250, 0.625);
-	if (index == 4) return vec2(-0.300, -0.100);
-	if (index == 5) return vec2(0.100, -0.300);
-	if (index == 6) return vec2(0.300, 0.100);
+	if (index == 0) {
+		return vec2(-0.625, -0.250);
+	}
+	if (index == 1) {
+		return vec2(0.250, -0.625);
+	}
+	if (index == 2) {
+		return vec2(0.625, 0.250);
+	}
+	if (index == 3) {
+		return vec2(-0.250, 0.625);
+	}
+	if (index == 4) {
+		return vec2(-0.300, -0.100);
+	}
+	if (index == 5) {
+		return vec2(0.100, -0.300);
+	}
+	if (index == 6) {
+		return vec2(0.300, 0.100);
+	}
 	return vec2(-0.100, 0.300);
 }
 
@@ -306,7 +320,9 @@ void main() {
 			} else {
 				final_visibility = 0.0;
 				for (int sample_index = 0; sample_index < 8; sample_index++) {
-					if (sample_index >= sample_count) break;
+					if (sample_index >= sample_count) {
+						break;
+					}
 					vec2 offset = sample_count == 1 ? vec2(0.0) : disk_sample(sample_index) * radius_texels;
 					// Balanced PCF already averages several independently displaced
 					// comparisons. A bilinear compare at every tap multiplies this into
@@ -328,7 +344,7 @@ void main() {
 			bool dynamic_hit_backface;
 			float ray_bias = max(params.atlas_center_voxel_size.w * 0.01, 0.0001);
 			if (dynamic_trace_voxels(receiver_position + light_direction * ray_bias, light_direction, occupancy.limits.x,
-					dynamic_hit_position, dynamic_hit_normal, dynamic_hit_distance, dynamic_hit_backface)) {
+						dynamic_hit_position, dynamic_hit_normal, dynamic_hit_distance, dynamic_hit_backface)) {
 				final_visibility = 0.0;
 			}
 		}

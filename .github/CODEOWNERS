@@ -292,3 +292,6 @@
 *.py                                          @godotengine/buildsystem
 SConstruct                                    @godotengine/buildsystem
 SCsub                                         @godotengine/buildsystem
+
+# Custom voxel engine module maintained in this fork.
+/modules/voxel_physics_3d/                     @jbookout98

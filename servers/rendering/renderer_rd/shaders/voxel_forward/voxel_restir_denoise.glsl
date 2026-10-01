@@ -15,7 +15,10 @@ struct Reservoir {
 	uvec4 metadata;
 };
 
-layout(set = 0, binding = 0, std430) readonly buffer SpatialReservoirs { Reservoir values[]; } spatial_reservoirs;
+layout(set = 0, binding = 0, std430) readonly buffer SpatialReservoirs {
+	Reservoir values[];
+}
+spatial_reservoirs;
 layout(rgba16f, set = 0, binding = 1) uniform restrict writeonly image2D indirect_output;
 
 layout(set = 0, binding = 2, std140) uniform Params {
@@ -32,14 +35,21 @@ layout(set = 0, binding = 2, std140) uniform Params {
 	ivec4 reuse;
 	vec4 limits;
 	vec4 validation;
-} params;
+}
+params;
 
 const uint RESERVOIR_VALID = 1u;
 
 bool compatible_face(Reservoir center, Reservoir sample_value) {
-	if ((sample_value.metadata.w & RESERVOIR_VALID) == 0u) return false;
-	if (any(isnan(sample_value.sample_radiance_weight_sum.xyz)) || any(isinf(sample_value.sample_radiance_weight_sum.xyz))) return false;
-	if (dot(center.visible_normal_estimator.xyz, sample_value.visible_normal_estimator.xyz) < 0.9999) return false;
+	if ((sample_value.metadata.w & RESERVOIR_VALID) == 0u) {
+		return false;
+	}
+	if (any(isnan(sample_value.sample_radiance_weight_sum.xyz)) || any(isinf(sample_value.sample_radiance_weight_sum.xyz))) {
+		return false;
+	}
+	if (dot(center.visible_normal_estimator.xyz, sample_value.visible_normal_estimator.xyz) < 0.9999) {
+		return false;
+	}
 	// Visible positions are canonical voxel-face centers. Permit adjacent voxels
 	// only when their faces lie on the same plane. This lets subpixel/single-pixel
 	// voxel faces share lighting across a continuous wall while retaining hard
@@ -50,10 +60,14 @@ bool compatible_face(Reservoir center, Reservoir sample_value) {
 
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-	if (any(greaterThanEqual(pixel, params.screen.xy))) return;
+	if (any(greaterThanEqual(pixel, params.screen.xy))) {
+		return;
+	}
 	// Debug views are written by the spatial pass and must expose raw reservoir
 	// state rather than a filtered visualization.
-	if (((params.state.w >> 1u) & 0xffu) != 0u) return;
+	if (((params.state.w >> 1u) & 0xffu) != 0u) {
+		return;
+	}
 
 	uint index = uint(pixel.x + pixel.y * params.screen.x);
 	Reservoir center = spatial_reservoirs.values[index];
@@ -67,9 +81,13 @@ void main() {
 	for (int y = -1; y <= 1; y++) {
 		for (int x = -1; x <= 1; x++) {
 			ivec2 candidate_pixel = pixel + ivec2(x, y);
-			if (any(lessThan(candidate_pixel, ivec2(0))) || any(greaterThanEqual(candidate_pixel, params.screen.xy))) continue;
+			if (any(lessThan(candidate_pixel, ivec2(0))) || any(greaterThanEqual(candidate_pixel, params.screen.xy))) {
+				continue;
+			}
 			Reservoir candidate = spatial_reservoirs.values[candidate_pixel.x + candidate_pixel.y * params.screen.x];
-			if (!compatible_face(center, candidate)) continue;
+			if (!compatible_face(center, candidate)) {
+				continue;
+			}
 			reconstructed += max(candidate.sample_radiance_weight_sum.xyz, vec3(0.0));
 			sample_count += 1.0;
 		}

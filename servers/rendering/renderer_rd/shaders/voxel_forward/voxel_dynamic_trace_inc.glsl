@@ -26,17 +26,21 @@ struct DynamicVoxelBvhNode {
 layout(set = 0, binding = 22, std430) readonly buffer DynamicVoxelVolumes {
 	uvec4 state;
 	DynamicVoxelVolume values[];
-} dynamic_voxel_volumes;
+}
+dynamic_voxel_volumes;
 layout(set = 0, binding = 23, std430) readonly buffer DynamicVoxelBvh {
 	uvec4 state;
 	DynamicVoxelBvhNode values[];
-} dynamic_voxel_bvh;
+}
+dynamic_voxel_bvh;
 layout(set = 0, binding = 24, std430) readonly buffer DynamicVoxelDirectory {
 	uint words[];
-} dynamic_voxel_directory;
+}
+dynamic_voxel_directory;
 layout(set = 0, binding = 25, std430) readonly buffer DynamicVoxelBricks {
 	uint words[];
-} dynamic_voxel_bricks;
+}
+dynamic_voxel_bricks;
 
 vec3 dynamic_transform_point(DynamicVoxelVolume volume, vec3 point) {
 	return vec3(
@@ -83,20 +87,30 @@ bool dynamic_volume_occupied(DynamicVoxelVolume volume, ivec3 cell) {
 	}
 	ivec3 brick = cell / 8;
 	uint directory_index = uint(brick.x) + uint(brick.y) * volume.brick_dimensions_brick_offset.x + uint(brick.z) * volume.brick_dimensions_brick_offset.x * volume.brick_dimensions_brick_offset.y;
-	if (directory_index >= volume.storage.x) return false;
+	if (directory_index >= volume.storage.x) {
+		return false;
+	}
 	uint code = dynamic_voxel_directory.words[volume.dimensions_directory_offset.w + directory_index];
-	if (code == 0u) return false;
-	if (code == 1u) return true;
+	if (code == 0u) {
+		return false;
+	}
+	if (code == 1u) {
+		return true;
+	}
 	ivec3 local_voxel = cell - brick * 8;
 	uint local_index = uint(local_voxel.x + local_voxel.y * 8 + local_voxel.z * 64);
 	uint word_index = (code - 2u) * 16u + (local_index >> 5u);
-	if (word_index >= volume.storage.y) return false;
+	if (word_index >= volume.storage.y) {
+		return false;
+	}
 	uint word = dynamic_voxel_bricks.words[volume.brick_dimensions_brick_offset.w + word_index];
 	return (word & (1u << (local_index & 31u))) != 0u;
 }
 
 int dynamic_minimum_axis(vec3 value) {
-	if (value.x <= value.y && value.x <= value.z) return 0;
+	if (value.x <= value.y && value.x <= value.z) {
+		return 0;
+	}
 	return value.y <= value.z ? 1 : 2;
 }
 
@@ -105,14 +119,18 @@ bool dynamic_trace_volume(uint volume_index, vec3 start_world, vec3 direction_wo
 	DynamicVoxelVolume volume = dynamic_voxel_volumes.values[volume_index];
 	float world_enter;
 	float world_exit;
-	if (!dynamic_intersect_aabb(start_world, direction_world, volume.bounds_min.xyz, volume.bounds_max.xyz, maximum_distance, world_enter, world_exit)) return false;
+	if (!dynamic_intersect_aabb(start_world, direction_world, volume.bounds_min.xyz, volume.bounds_max.xyz, maximum_distance, world_enter, world_exit)) {
+		return false;
+	}
 
 	vec3 local_origin = dynamic_transform_point(volume, start_world);
 	vec3 local_direction = dynamic_transform_direction(volume, direction_world);
 	vec3 local_bounds_max = vec3(volume.dimensions_directory_offset.xyz);
 	float enter_t;
 	float exit_t;
-	if (!dynamic_intersect_aabb(local_origin, local_direction, vec3(0.0), local_bounds_max, maximum_distance, enter_t, exit_t)) return false;
+	if (!dynamic_intersect_aabb(local_origin, local_direction, vec3(0.0), local_bounds_max, maximum_distance, enter_t, exit_t)) {
+		return false;
+	}
 
 	float epsilon_t = max(DYNAMIC_TRACE_EPSILON, 0.0001 / max(length(local_direction), DYNAMIC_TRACE_EPSILON));
 	vec3 entry_position = local_origin + local_direction * min(enter_t + epsilon_t, exit_t);
@@ -144,17 +162,27 @@ bool dynamic_trace_volume(uint volume_index, vec3 start_world, vec3 direction_wo
 	vec3 inverse_direction = dynamic_safe_inverse(local_direction);
 	vec3 next_boundary = vec3(cell + max(step_direction, ivec3(0)));
 	vec3 next_t = (next_boundary - local_origin) * inverse_direction;
-	if (step_direction.x == 0) next_t.x = DYNAMIC_TRACE_HUGE;
-	if (step_direction.y == 0) next_t.y = DYNAMIC_TRACE_HUGE;
-	if (step_direction.z == 0) next_t.z = DYNAMIC_TRACE_HUGE;
+	if (step_direction.x == 0) {
+		next_t.x = DYNAMIC_TRACE_HUGE;
+	}
+	if (step_direction.y == 0) {
+		next_t.y = DYNAMIC_TRACE_HUGE;
+	}
+	if (step_direction.z == 0) {
+		next_t.z = DYNAMIC_TRACE_HUGE;
+	}
 	vec3 delta_t = abs(inverse_direction);
 	uint maximum_steps = max(dynamic_voxel_volumes.state.w, 1u);
 	for (uint step = 0u; step < 4096u && step < maximum_steps; step++) {
 		int axis = dynamic_minimum_axis(next_t);
 		float travel_t = next_t[axis];
-		if (travel_t > exit_t || travel_t > maximum_distance) break;
+		if (travel_t > exit_t || travel_t > maximum_distance) {
+			break;
+		}
 		cell[axis] += step_direction[axis];
-		if (any(lessThan(cell, ivec3(0))) || any(greaterThanEqual(cell, ivec3(volume.dimensions_directory_offset.xyz)))) break;
+		if (any(lessThan(cell, ivec3(0))) || any(greaterThanEqual(cell, ivec3(volume.dimensions_directory_offset.xyz)))) {
+			break;
+		}
 		next_t[axis] += delta_t[axis];
 		if (dynamic_volume_occupied(volume, cell)) {
 			vec3 local_normal = vec3(0.0);
@@ -173,7 +201,9 @@ bool dynamic_trace_voxels(vec3 start_world, vec3 direction_world, float maximum_
 		out vec3 hit_position, out vec3 hit_normal, out float hit_distance, out bool hit_backface) {
 	uint volume_count = dynamic_voxel_volumes.state.x;
 	uint node_count = dynamic_voxel_volumes.state.y;
-	if (volume_count == 0u || node_count == 0u) return false;
+	if (volume_count == 0u || node_count == 0u) {
+		return false;
+	}
 	uint stack[DYNAMIC_BVH_STACK_SIZE];
 	int stack_size = 1;
 	stack[0] = dynamic_voxel_bvh.state.x;
@@ -182,11 +212,15 @@ bool dynamic_trace_voxels(vec3 start_world, vec3 direction_world, float maximum_
 	uint visited = 0u;
 	while (stack_size > 0 && visited++ < node_count) {
 		uint node_index = stack[--stack_size];
-		if (node_index >= node_count) continue;
+		if (node_index >= node_count) {
+			continue;
+		}
 		DynamicVoxelBvhNode node = dynamic_voxel_bvh.values[node_index];
 		float node_enter;
 		float node_exit;
-		if (!dynamic_intersect_aabb(start_world, direction_world, node.bounds_min.xyz, node.bounds_max.xyz, closest, node_enter, node_exit)) continue;
+		if (!dynamic_intersect_aabb(start_world, direction_world, node.bounds_min.xyz, node.bounds_max.xyz, closest, node_enter, node_exit)) {
+			continue;
+		}
 		if (node.children.z == DYNAMIC_NODE_LEAF) {
 			vec3 candidate_position;
 			vec3 candidate_normal;

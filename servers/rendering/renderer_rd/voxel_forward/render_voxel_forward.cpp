@@ -3,6 +3,7 @@
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
 /**************************************************************************/
 /* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
 /* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
@@ -58,7 +59,7 @@ public:
 };
 
 RenderVoxelForward::RenderVoxelForward() : RenderForwardClustered(true, true) {
- bake_renderer = this;
+	bake_renderer = this;
 	indirect_boundary_readback_receiver = memnew(IndirectBoundaryReadbackReceiver(this));
 	occupancy_uniform_buffer = RD::get_singleton()->uniform_buffer_create(sizeof(OccupancyUniformData));
 	OccupancyUniformData empty_occupancy = {};
@@ -151,14 +152,16 @@ RenderVoxelForward::RenderVoxelForward() : RenderForwardClustered(true, true) {
 }
 
 RenderVoxelForward::~RenderVoxelForward() {
- bake_renderer = nullptr;
- if (ddgi_seed_version.is_valid()) ddgi_seed_shader.version_free(ddgi_seed_version);
- for (KeyValue<RID, DdgiWorldState> &entry : ddgi_worlds) {
-  SWAP(ddgi_state, entry.value);
-  _free_world_lighting();
-  SWAP(ddgi_state, entry.value);
- }
- ddgi_worlds.clear();
+	bake_renderer = nullptr;
+	if (ddgi_seed_version.is_valid()) {
+		ddgi_seed_shader.version_free(ddgi_seed_version);
+	}
+	for (KeyValue<RID, DdgiWorldState> &entry : ddgi_worlds) {
+		SWAP(ddgi_state, entry.value);
+		_free_world_lighting();
+		SWAP(ddgi_state, entry.value);
+	}
+	ddgi_worlds.clear();
 	if (indirect_boundary_readback_receiver != nullptr) {
 		indirect_boundary_readback_receiver->detach();
 		memdelete(indirect_boundary_readback_receiver);
@@ -971,13 +974,17 @@ void RenderVoxelForward::_update_dynamic_voxel_lighting_scene(const VoxelForward
 	Vector<MortonVolume> morton_volumes;
 	if (!current_bounds.is_empty()) {
 		AABB scene_bounds = current_bounds[0];
-		for (int index = 1; index < current_bounds.size(); index++) scene_bounds.merge_with(current_bounds[index]);
+		for (int index = 1; index < current_bounds.size(); index++) {
+			scene_bounds.merge_with(current_bounds[index]);
+		}
 		const Vector3 scene_size = scene_bounds.size;
 		morton_volumes.resize(current_bounds.size());
 		for (int index = 0; index < current_bounds.size(); index++) {
 			const Vector3 center = current_bounds[index].get_center();
 			Vector3 unit;
-			for (int axis = 0; axis < 3; axis++) unit[axis] = scene_size[axis] > 0.000001f ? CLAMP((center[axis] - scene_bounds.position[axis]) / scene_size[axis], 0.0f, 1.0f) : 0.5f;
+			for (int axis = 0; axis < 3; axis++) {
+				unit[axis] = scene_size[axis] > 0.000001f ? CLAMP((center[axis] - scene_bounds.position[axis]) / scene_size[axis], 0.0f, 1.0f) : 0.5f;
+			}
 			const uint32_t x = uint32_t(Math::round(unit.x * 1023.0f));
 			const uint32_t y = uint32_t(Math::round(unit.y * 1023.0f));
 			const uint32_t z = uint32_t(Math::round(unit.z * 1023.0f));
@@ -993,7 +1000,9 @@ void RenderVoxelForward::_update_dynamic_voxel_lighting_scene(const VoxelForward
 		gpu_nodes.push_back(DdgiDynamicBvhNodeGpuData());
 		DdgiDynamicBvhNodeGpuData node = {};
 		AABB bounds = current_bounds[morton_volumes[begin].volume_index];
-		for (uint32_t index = begin + 1u; index < end; index++) bounds.merge_with(current_bounds[morton_volumes[index].volume_index]);
+		for (uint32_t index = begin + 1u; index < end; index++) {
+			bounds.merge_with(current_bounds[morton_volumes[index].volume_index]);
+		}
 		for (int axis = 0; axis < 3; axis++) {
 			node.bounds_min[axis] = bounds.position[axis];
 			node.bounds_max[axis] = (bounds.position + bounds.size)[axis];
@@ -1010,7 +1019,9 @@ void RenderVoxelForward::_update_dynamic_voxel_lighting_scene(const VoxelForward
 		return node_index;
 	};
 	uint32_t root_node = 0;
-	if (!morton_volumes.is_empty()) root_node = build_node(build_node, 0u, morton_volumes.size());
+	if (!morton_volumes.is_empty()) {
+		root_node = build_node(build_node, 0u, morton_volumes.size());
+	}
 
 	const uint32_t volume_upload_size = 16u + gpu_volumes.size() * sizeof(DdgiDynamicVolumeGpuData);
 	const uint32_t bvh_upload_size = 16u + gpu_nodes.size() * sizeof(DdgiDynamicBvhNodeGpuData);
@@ -1024,7 +1035,9 @@ void RenderVoxelForward::_update_dynamic_voxel_lighting_scene(const VoxelForward
 	volume_header[1] = gpu_nodes.size();
 	volume_header[2] = uint32_t(ddgi_state.ddgi_dynamic_scene_revision + (scene_changed ? 1u : 0u));
 	volume_header[3] = uint32_t(CLAMP(int(GLOBAL_GET("rendering/voxel_forward/indirect_light/ddgi/max_trace_steps")), 32, 4096));
-	if (!gpu_volumes.is_empty()) memcpy(volume_bytes.ptrw() + 16, gpu_volumes.ptr(), gpu_volumes.size() * sizeof(DdgiDynamicVolumeGpuData));
+	if (!gpu_volumes.is_empty()) {
+		memcpy(volume_bytes.ptrw() + 16, gpu_volumes.ptr(), gpu_volumes.size() * sizeof(DdgiDynamicVolumeGpuData));
+	}
 	rd->buffer_update(ddgi_state.ddgi_dynamic_volume_buffer, 0, volume_bytes.size(), volume_bytes.ptr());
 	PackedByteArray bvh_bytes;
 	bvh_bytes.resize(bvh_upload_size);
@@ -1032,13 +1045,17 @@ void RenderVoxelForward::_update_dynamic_voxel_lighting_scene(const VoxelForward
 	uint32_t *bvh_header = reinterpret_cast<uint32_t *>(bvh_bytes.ptrw());
 	bvh_header[0] = root_node;
 	bvh_header[1] = gpu_nodes.size();
-	if (!gpu_nodes.is_empty()) memcpy(bvh_bytes.ptrw() + 16, gpu_nodes.ptr(), gpu_nodes.size() * sizeof(DdgiDynamicBvhNodeGpuData));
+	if (!gpu_nodes.is_empty()) {
+		memcpy(bvh_bytes.ptrw() + 16, gpu_nodes.ptr(), gpu_nodes.size() * sizeof(DdgiDynamicBvhNodeGpuData));
+	}
 	rd->buffer_update(ddgi_state.ddgi_dynamic_bvh_buffer, 0, bvh_bytes.size(), bvh_bytes.ptr());
 	ddgi_state.ddgi_dynamic_uploaded_bytes += volume_bytes.size() + bvh_bytes.size();
 	ddgi_state.ddgi_dynamic_volume_count = gpu_volumes.size();
 	ddgi_state.ddgi_dynamic_bvh_node_count = gpu_nodes.size();
 	ddgi_state.ddgi_dynamic_current_bounds = current_bounds;
-	if (scene_changed) ddgi_state.ddgi_dynamic_scene_revision++;
+	if (scene_changed) {
+		ddgi_state.ddgi_dynamic_scene_revision++;
+	}
 }
 
 void RenderVoxelForward::_free_restir_gi() {
@@ -1198,7 +1215,9 @@ void RenderVoxelForward::_ddgi_upload_resident_probe_records(uint32_t p_lod, uin
 	}
 	auto floor_divide = [](int p_value, int p_divisor) {
 		int quotient = p_value / p_divisor;
-		if (p_value < 0 && p_value % p_divisor != 0) quotient--;
+		if (p_value < 0 && p_value % p_divisor != 0) {
+			quotient--;
+		}
 		return quotient;
 	};
 	uint64_t cache_hits = 0;
@@ -1303,10 +1322,12 @@ void RenderVoxelForward::_ddgi_upload_resident_probe_records(uint32_t p_lod, uin
 	RD::get_singleton()->compute_list_set_push_constant(list, &push, sizeof(push));
 	RD::get_singleton()->compute_list_dispatch_threads(list, updates.size(), 1, 1);
 	RD::get_singleton()->compute_list_end();
- Vector<DdgiGpuProbeRecord> seed_records;
- seed_records.resize(updates.size());
- for (int i = 0; i < updates.size(); i++) seed_records.write[i] = updates[i].record;
- _seed_baked_records(p_lod, changed_slots, seed_records);
+	Vector<DdgiGpuProbeRecord> seed_records;
+	seed_records.resize(updates.size());
+	for (int i = 0; i < updates.size(); i++) {
+		seed_records.write[i] = updates[i].record;
+	}
+	_seed_baked_records(p_lod, changed_slots, seed_records);
 	ddgi_state.ddgi_resident_cache_hits += cache_hits;
 	ddgi_state.ddgi_resident_empty_slots += empty_slots;
 	ddgi_state.ddgi_cascades[p_lod].activation_dirty = true;
@@ -1315,7 +1336,6 @@ void RenderVoxelForward::_ddgi_upload_resident_probe_records(uint32_t p_lod, uin
 		ddgi_state.ddgi_new_plane_upload_count += MAX(1u, uint32_t(updates.size()) / MAX(1u, p_resolution * p_resolution));
 	}
 }
-
 
 void RenderVoxelForward::_render_ddgi_indirect_light(const RenderDataRD *p_render_data, RID p_shadow_atlas, RID p_sampler, const Vector3 &p_light_direction, const Color &p_light_color, float p_light_energy) {
 	RendererRD::MaterialStorage *material_storage = RendererRD::MaterialStorage::get_singleton();
@@ -1486,7 +1506,9 @@ void RenderVoxelForward::_render_ddgi_indirect_light(const RenderDataRD *p_rende
 	for (uint32_t cascade = 0; cascade < DDGI_LOD_COUNT; cascade++) {
 		const uint32_t required_index_capacity = total_probes * 3u;
 		if (!ddgi_state.ddgi_cascades[cascade].probe_index_buffer.is_valid() || ddgi_state.ddgi_cascades[cascade].probe_index_capacity < required_index_capacity) {
-			if (ddgi_state.ddgi_cascades[cascade].probe_index_buffer.is_valid()) RD::get_singleton()->free_rid(ddgi_state.ddgi_cascades[cascade].probe_index_buffer);
+			if (ddgi_state.ddgi_cascades[cascade].probe_index_buffer.is_valid()) {
+				RD::get_singleton()->free_rid(ddgi_state.ddgi_cascades[cascade].probe_index_buffer);
+			}
 			ddgi_state.ddgi_cascades[cascade].probe_index_buffer = RD::get_singleton()->storage_buffer_create(required_index_capacity * sizeof(uint32_t));
 			ddgi_state.ddgi_cascades[cascade].probe_index_capacity = required_index_capacity;
 		}
@@ -1636,8 +1658,8 @@ void RenderVoxelForward::_render_ddgi_indirect_light(const RenderDataRD *p_rende
 	// already identifies the affected sparse pages; unrelated probes retain
 	// their authoritative records and atlas history.
 	for (uint32_t lod_index = 0; lod_index < DDGI_LOD_COUNT; lod_index++) {
-  const BakedWorld *baked = baked_worlds.getptr(lighting_scenario);
-  const bool initial_seed = baked && !baked->invalidated && !(baked->initial_lods & (1u << lod_index)) && world.ddgi_pending_page_count == 0;
+		const BakedWorld *baked = baked_worlds.getptr(lighting_scenario);
+		const bool initial_seed = baked && !baked->invalidated && !(baked->initial_lods & (1u << lod_index)) && world.ddgi_pending_page_count == 0;
 		if (residency_dirty[lod_index] || placement_changed || page_publication_changed || initial_seed) {
 			const bool force_full = resources_reallocated || !had_history[lod_index] || initial_seed;
 			_ddgi_upload_resident_probe_records(lod_index, resolution, previous_origin[lod_index], had_history[lod_index], force_full, page_publication_changed, camera_shift[lod_index], world);
@@ -1665,7 +1687,9 @@ void RenderVoxelForward::_render_ddgi_indirect_light(const RenderDataRD *p_rende
 	}
 	bool dynamic_buffer_reallocated = false;
 	if (!ddgi_state.ddgi_cascades[lod].dynamic_bin_buffer.is_valid() || ddgi_state.ddgi_cascades[lod].dynamic_bin_capacity < total_probes) {
-		if (ddgi_state.ddgi_cascades[lod].dynamic_bin_buffer.is_valid()) RD::get_singleton()->free_rid(ddgi_state.ddgi_cascades[lod].dynamic_bin_buffer);
+		if (ddgi_state.ddgi_cascades[lod].dynamic_bin_buffer.is_valid()) {
+			RD::get_singleton()->free_rid(ddgi_state.ddgi_cascades[lod].dynamic_bin_buffer);
+		}
 		ddgi_state.ddgi_cascades[lod].dynamic_bin_buffer = RD::get_singleton()->storage_buffer_create(total_probes * sizeof(uint32_t));
 		ddgi_state.ddgi_cascades[lod].dynamic_bin_capacity = total_probes;
 		dynamic_buffer_reallocated = true;
@@ -1711,60 +1735,60 @@ void RenderVoxelForward::_render_ddgi_indirect_light(const RenderDataRD *p_rende
 	const bool selected_lighting_changed = ddgi_state.ddgi_cascades[lod].lighting_revision != ddgi_state.ddgi_lighting_revision;
 	const uint32_t dirty_probe_budget = selected_lighting_changed ? lighting_probes_per_frame : urgent_probes_per_frame;
 	if (ddgi_state.ddgi_cascades[lod].activation_dirty || dynamic_bins_changed) {
-	RENDER_TIMESTAMP("DDGI Probe Classification");
-	RD::get_singleton()->buffer_clear(ddgi_state.ddgi_cascades[lod].probe_counter_buffer, 0, 6 * sizeof(uint32_t));
-	DdgiClassifyUniformData classify = {};
-	classify.world_origin_voxel_size[0] = world.origin.x;
-	classify.world_origin_voxel_size[1] = world.origin.y;
-	classify.world_origin_voxel_size[2] = world.origin.z;
-	classify.world_origin_voxel_size[3] = world.voxel_size;
-	classify.grid_origin_lod[0] = ddgi_state.ddgi_cascades[lod].logical_origin.x;
-	classify.grid_origin_lod[1] = ddgi_state.ddgi_cascades[lod].logical_origin.y;
-	classify.grid_origin_lod[2] = ddgi_state.ddgi_cascades[lod].logical_origin.z;
-	classify.grid_origin_lod[3] = lod;
-	classify.grid_resolution_phase[0] = resolution;
-	classify.cell_size_voxels[0] = world.ddgi_cell_spacing_voxels[lod];
-	classify.cell_size_voxels[1] = world.ddgi_cell_spacing_voxels[lod];
-	classify.cell_size_voxels[2] = world.ddgi_cell_spacing_voxels[lod];
-	classify.directory_revision[0] = world.directory_mask;
-	classify.directory_revision[1] = world.max_probe_count;
-	classify.directory_revision[2] = uint32_t(world.revision);
-	classify.directory_revision[3] = ray_stride;
-	classify.schedule[0] = probes_per_frame;
-	classify.schedule[1] = total_probes;
-	classify.schedule[2] = dirty_probe_budget;
-	classify.schedule[3] = camera_probes_per_frame;
-	classify.changes[0] = selected_lighting_changed ? 1u : 0u;
-	classify.changes[1] = 0u;
-	classify.changes[2] = ddgi_state.ddgi_dynamic_dirty_bounds[lod].is_empty() ? 0u : 1u;
+		RENDER_TIMESTAMP("DDGI Probe Classification");
+		RD::get_singleton()->buffer_clear(ddgi_state.ddgi_cascades[lod].probe_counter_buffer, 0, 6 * sizeof(uint32_t));
+		DdgiClassifyUniformData classify = {};
+		classify.world_origin_voxel_size[0] = world.origin.x;
+		classify.world_origin_voxel_size[1] = world.origin.y;
+		classify.world_origin_voxel_size[2] = world.origin.z;
+		classify.world_origin_voxel_size[3] = world.voxel_size;
+		classify.grid_origin_lod[0] = ddgi_state.ddgi_cascades[lod].logical_origin.x;
+		classify.grid_origin_lod[1] = ddgi_state.ddgi_cascades[lod].logical_origin.y;
+		classify.grid_origin_lod[2] = ddgi_state.ddgi_cascades[lod].logical_origin.z;
+		classify.grid_origin_lod[3] = lod;
+		classify.grid_resolution_phase[0] = resolution;
+		classify.cell_size_voxels[0] = world.ddgi_cell_spacing_voxels[lod];
+		classify.cell_size_voxels[1] = world.ddgi_cell_spacing_voxels[lod];
+		classify.cell_size_voxels[2] = world.ddgi_cell_spacing_voxels[lod];
+		classify.directory_revision[0] = world.directory_mask;
+		classify.directory_revision[1] = world.max_probe_count;
+		classify.directory_revision[2] = uint32_t(world.revision);
+		classify.directory_revision[3] = ray_stride;
+		classify.schedule[0] = probes_per_frame;
+		classify.schedule[1] = total_probes;
+		classify.schedule[2] = dirty_probe_budget;
+		classify.schedule[3] = camera_probes_per_frame;
+		classify.changes[0] = selected_lighting_changed ? 1u : 0u;
+		classify.changes[1] = 0u;
+		classify.changes[2] = ddgi_state.ddgi_dynamic_dirty_bounds[lod].is_empty() ? 0u : 1u;
 
-	const RID activate_shader_rid = ddgi_activate_shader.version_get_shader(ddgi_activate_shader_version, 0);
-	RID &activate_set = ddgi_state.ddgi_cascades[lod].classify_uniform_set;
-	if (!activate_set.is_valid() || !RD::get_singleton()->uniform_set_is_valid(activate_set)) {
-		RD::Uniform a_records(RD::UNIFORM_TYPE_STORAGE_BUFFER, 0, Vector<RID>({ ddgi_state.ddgi_cascades[lod].probe_records }));
-		RD::Uniform a_indices(RD::UNIFORM_TYPE_STORAGE_BUFFER, 1, Vector<RID>({ ddgi_state.ddgi_cascades[lod].probe_index_buffer }));
-		RD::Uniform a_counters(RD::UNIFORM_TYPE_STORAGE_BUFFER, 2, Vector<RID>({ ddgi_state.ddgi_cascades[lod].probe_counter_buffer }));
-		RD::Uniform a_aabbs(RD::UNIFORM_TYPE_STORAGE_BUFFER, 3, Vector<RID>({ ddgi_state.ddgi_cascades[lod].dynamic_bin_buffer }));
-		RD::Uniform a_metadata(RD::UNIFORM_TYPE_IMAGE, 4, Vector<RID>({ ddgi_state.ddgi_cascades[lod].metadata_rd }));
-		RD::Uniform a_dispatch(RD::UNIFORM_TYPE_STORAGE_BUFFER, 6, Vector<RID>({ ddgi_state.ddgi_cascades[lod].probe_dispatch_buffer }));
-		activate_set = UniformSetCacheRD::get_singleton()->get_cache(activate_shader_rid, 0, a_records, a_indices, a_counters, a_aabbs, a_metadata, a_dispatch);
-	}
-	RD::get_singleton()->draw_command_begin_label("DDGI GPU Worklist Build");
-	RD::ComputeListID activate_list = RD::get_singleton()->compute_list_begin();
-	RD::get_singleton()->compute_list_bind_compute_pipeline(activate_list, ddgi_activate_pipeline);
-	RD::get_singleton()->compute_list_bind_uniform_set(activate_list, activate_set, 0);
-	classify.grid_resolution_phase[3] = 0;
-	RD::get_singleton()->compute_list_set_push_constant(activate_list, &classify, sizeof(classify));
-	RD::get_singleton()->compute_list_dispatch_threads(activate_list, total_probes, 1, 1);
-	RD::get_singleton()->compute_list_add_barrier(activate_list);
-	classify.grid_resolution_phase[3] = 1;
-	RD::get_singleton()->compute_list_set_push_constant(activate_list, &classify, sizeof(classify));
-	RD::get_singleton()->compute_list_dispatch_threads(activate_list, 1, 1, 1);
-	RD::get_singleton()->compute_list_end();
-	RD::get_singleton()->draw_command_end_label();
-	ddgi_state.ddgi_cascades[lod].activation_dirty = false;
-	ddgi_state.ddgi_cascades[lod].lighting_revision = ddgi_state.ddgi_lighting_revision;
-	ddgi_state.ddgi_dynamic_dirty_bounds[lod].clear();
+		const RID activate_shader_rid = ddgi_activate_shader.version_get_shader(ddgi_activate_shader_version, 0);
+		RID &activate_set = ddgi_state.ddgi_cascades[lod].classify_uniform_set;
+		if (!activate_set.is_valid() || !RD::get_singleton()->uniform_set_is_valid(activate_set)) {
+			RD::Uniform a_records(RD::UNIFORM_TYPE_STORAGE_BUFFER, 0, Vector<RID>({ ddgi_state.ddgi_cascades[lod].probe_records }));
+			RD::Uniform a_indices(RD::UNIFORM_TYPE_STORAGE_BUFFER, 1, Vector<RID>({ ddgi_state.ddgi_cascades[lod].probe_index_buffer }));
+			RD::Uniform a_counters(RD::UNIFORM_TYPE_STORAGE_BUFFER, 2, Vector<RID>({ ddgi_state.ddgi_cascades[lod].probe_counter_buffer }));
+			RD::Uniform a_aabbs(RD::UNIFORM_TYPE_STORAGE_BUFFER, 3, Vector<RID>({ ddgi_state.ddgi_cascades[lod].dynamic_bin_buffer }));
+			RD::Uniform a_metadata(RD::UNIFORM_TYPE_IMAGE, 4, Vector<RID>({ ddgi_state.ddgi_cascades[lod].metadata_rd }));
+			RD::Uniform a_dispatch(RD::UNIFORM_TYPE_STORAGE_BUFFER, 6, Vector<RID>({ ddgi_state.ddgi_cascades[lod].probe_dispatch_buffer }));
+			activate_set = UniformSetCacheRD::get_singleton()->get_cache(activate_shader_rid, 0, a_records, a_indices, a_counters, a_aabbs, a_metadata, a_dispatch);
+		}
+		RD::get_singleton()->draw_command_begin_label("DDGI GPU Worklist Build");
+		RD::ComputeListID activate_list = RD::get_singleton()->compute_list_begin();
+		RD::get_singleton()->compute_list_bind_compute_pipeline(activate_list, ddgi_activate_pipeline);
+		RD::get_singleton()->compute_list_bind_uniform_set(activate_list, activate_set, 0);
+		classify.grid_resolution_phase[3] = 0;
+		RD::get_singleton()->compute_list_set_push_constant(activate_list, &classify, sizeof(classify));
+		RD::get_singleton()->compute_list_dispatch_threads(activate_list, total_probes, 1, 1);
+		RD::get_singleton()->compute_list_add_barrier(activate_list);
+		classify.grid_resolution_phase[3] = 1;
+		RD::get_singleton()->compute_list_set_push_constant(activate_list, &classify, sizeof(classify));
+		RD::get_singleton()->compute_list_dispatch_threads(activate_list, 1, 1, 1);
+		RD::get_singleton()->compute_list_end();
+		RD::get_singleton()->draw_command_end_label();
+		ddgi_state.ddgi_cascades[lod].activation_dirty = false;
+		ddgi_state.ddgi_cascades[lod].lighting_revision = ddgi_state.ddgi_lighting_revision;
+		ddgi_state.ddgi_dynamic_dirty_bounds[lod].clear();
 	}
 
 	const uint32_t color_lod = MIN(lod, REFLECTION_CASCADE_COUNT - 1);
@@ -1880,39 +1904,39 @@ void RenderVoxelForward::_render_ddgi_indirect_light(const RenderDataRD *p_rende
 			ddgi_state.ddgi_cascades[lod].trace_sky_sampler[ddgi_frame_resource] != sky_sampler ||
 			ddgi_state.ddgi_cascades[lod].trace_color_grid[ddgi_frame_resource] != ddgi_state.reflection_color_grid_rd[color_lod];
 	if (trace_bindings_changed || !trace_set.is_valid() || !RD::get_singleton()->uniform_set_is_valid(trace_set)) {
-	RD::Uniform t_surfels(RD::UNIFORM_TYPE_STORAGE_BUFFER, 0, Vector<RID>({ ddgi_state.ddgi_surfel_buffer }));
-	RD::Uniform t_indices(RD::UNIFORM_TYPE_STORAGE_BUFFER, 1, Vector<RID>({ ddgi_state.ddgi_cascades[lod].probe_index_buffer }));
-	RD::Uniform t_records(RD::UNIFORM_TYPE_STORAGE_BUFFER, 2, Vector<RID>({ ddgi_state.ddgi_cascades[lod].probe_records }));
-	RD::Uniform t_counters(RD::UNIFORM_TYPE_STORAGE_BUFFER, 3, Vector<RID>({ ddgi_state.ddgi_cascades[lod].probe_counter_buffer }));
-	RD::Uniform t_directory(RD::UNIFORM_TYPE_STORAGE_BUFFER, 4, Vector<RID>({ world.directory_buffer }));
-	RD::Uniform t_bricks(RD::UNIFORM_TYPE_STORAGE_BUFFER, 5, Vector<RID>({ world.brick_buffer }));
-	RD::Uniform t_color(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 6, Vector<RID>({ p_sampler, ddgi_state.reflection_color_grid_rd[color_lod] }));
-	RD::Uniform t_shadow(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 7, Vector<RID>({ p_sampler, p_shadow_atlas }));
-	RD::Uniform t_irradiance0(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 8, Vector<RID>({ p_sampler, ddgi_state.ddgi_cascades[0].irradiance_rd }));
-	RD::Uniform t_visibility0(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 9, Vector<RID>({ p_sampler, ddgi_state.ddgi_cascades[0].visibility_rd }));
-	RD::Uniform t_metadata0(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 10, Vector<RID>({ p_sampler, ddgi_state.ddgi_cascades[0].metadata_rd }));
-	RD::Uniform t_irradiance1(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 11, Vector<RID>({ p_sampler, ddgi_state.ddgi_cascades[1].irradiance_rd }));
-	RD::Uniform t_visibility1(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 12, Vector<RID>({ p_sampler, ddgi_state.ddgi_cascades[1].visibility_rd }));
-	RD::Uniform t_metadata1(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 13, Vector<RID>({ p_sampler, ddgi_state.ddgi_cascades[1].metadata_rd }));
-	RD::Uniform t_irradiance2(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 14, Vector<RID>({ p_sampler, ddgi_state.ddgi_cascades[2].irradiance_rd }));
-	RD::Uniform t_visibility2(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 15, Vector<RID>({ p_sampler, ddgi_state.ddgi_cascades[2].visibility_rd }));
-	RD::Uniform t_metadata2(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 16, Vector<RID>({ p_sampler, ddgi_state.ddgi_cascades[2].metadata_rd }));
-	RD::Uniform t_irradiance3(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 17, Vector<RID>({ p_sampler, ddgi_state.ddgi_cascades[3].irradiance_rd }));
-	RD::Uniform t_visibility3(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 18, Vector<RID>({ p_sampler, ddgi_state.ddgi_cascades[3].visibility_rd }));
-	RD::Uniform t_metadata3(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 19, Vector<RID>({ p_sampler, ddgi_state.ddgi_cascades[3].metadata_rd }));
-	RD::Uniform t_params(RD::UNIFORM_TYPE_UNIFORM_BUFFER, 20, Vector<RID>({ ddgi_state.ddgi_trace_uniform_buffer[ddgi_frame_resource] }));
-	RD::Uniform t_sky(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 21, Vector<RID>({ sky_sampler, environment_radiance }));
-	RD::Uniform t_dynamic_volumes(RD::UNIFORM_TYPE_STORAGE_BUFFER, 22, Vector<RID>({ ddgi_state.ddgi_dynamic_volume_buffer }));
-	RD::Uniform t_dynamic_bvh(RD::UNIFORM_TYPE_STORAGE_BUFFER, 23, Vector<RID>({ ddgi_state.ddgi_dynamic_bvh_buffer }));
-	RD::Uniform t_dynamic_directory(RD::UNIFORM_TYPE_STORAGE_BUFFER, 24, Vector<RID>({ ddgi_state.ddgi_dynamic_directory_buffer }));
-	RD::Uniform t_dynamic_bricks(RD::UNIFORM_TYPE_STORAGE_BUFFER, 25, Vector<RID>({ ddgi_state.ddgi_dynamic_brick_buffer }));
-	RD::Uniform t_local_lights(RD::UNIFORM_TYPE_STORAGE_BUFFER, 26, Vector<RID>({ ddgi_state.ddgi_local_light_buffer }));
-	trace_set = UniformSetCacheRD::get_singleton()->get_cache(trace_shader_rid, 0, t_surfels, t_indices, t_records, t_counters, t_directory, t_bricks, t_color, t_shadow, t_irradiance0, t_visibility0, t_metadata0, t_irradiance1, t_visibility1, t_metadata1, t_irradiance2, t_visibility2, t_metadata2, t_irradiance3, t_visibility3, t_metadata3, t_params, t_sky, t_dynamic_volumes, t_dynamic_bvh, t_dynamic_directory, t_dynamic_bricks, t_local_lights);
-	ddgi_state.ddgi_cascades[lod].trace_shadow[ddgi_frame_resource] = p_shadow_atlas;
-	ddgi_state.ddgi_cascades[lod].trace_environment[ddgi_frame_resource] = environment_radiance;
-	ddgi_state.ddgi_cascades[lod].trace_sampler[ddgi_frame_resource] = p_sampler;
-	ddgi_state.ddgi_cascades[lod].trace_sky_sampler[ddgi_frame_resource] = sky_sampler;
-	ddgi_state.ddgi_cascades[lod].trace_color_grid[ddgi_frame_resource] = ddgi_state.reflection_color_grid_rd[color_lod];
+		RD::Uniform t_surfels(RD::UNIFORM_TYPE_STORAGE_BUFFER, 0, Vector<RID>({ ddgi_state.ddgi_surfel_buffer }));
+		RD::Uniform t_indices(RD::UNIFORM_TYPE_STORAGE_BUFFER, 1, Vector<RID>({ ddgi_state.ddgi_cascades[lod].probe_index_buffer }));
+		RD::Uniform t_records(RD::UNIFORM_TYPE_STORAGE_BUFFER, 2, Vector<RID>({ ddgi_state.ddgi_cascades[lod].probe_records }));
+		RD::Uniform t_counters(RD::UNIFORM_TYPE_STORAGE_BUFFER, 3, Vector<RID>({ ddgi_state.ddgi_cascades[lod].probe_counter_buffer }));
+		RD::Uniform t_directory(RD::UNIFORM_TYPE_STORAGE_BUFFER, 4, Vector<RID>({ world.directory_buffer }));
+		RD::Uniform t_bricks(RD::UNIFORM_TYPE_STORAGE_BUFFER, 5, Vector<RID>({ world.brick_buffer }));
+		RD::Uniform t_color(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 6, Vector<RID>({ p_sampler, ddgi_state.reflection_color_grid_rd[color_lod] }));
+		RD::Uniform t_shadow(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 7, Vector<RID>({ p_sampler, p_shadow_atlas }));
+		RD::Uniform t_irradiance0(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 8, Vector<RID>({ p_sampler, ddgi_state.ddgi_cascades[0].irradiance_rd }));
+		RD::Uniform t_visibility0(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 9, Vector<RID>({ p_sampler, ddgi_state.ddgi_cascades[0].visibility_rd }));
+		RD::Uniform t_metadata0(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 10, Vector<RID>({ p_sampler, ddgi_state.ddgi_cascades[0].metadata_rd }));
+		RD::Uniform t_irradiance1(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 11, Vector<RID>({ p_sampler, ddgi_state.ddgi_cascades[1].irradiance_rd }));
+		RD::Uniform t_visibility1(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 12, Vector<RID>({ p_sampler, ddgi_state.ddgi_cascades[1].visibility_rd }));
+		RD::Uniform t_metadata1(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 13, Vector<RID>({ p_sampler, ddgi_state.ddgi_cascades[1].metadata_rd }));
+		RD::Uniform t_irradiance2(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 14, Vector<RID>({ p_sampler, ddgi_state.ddgi_cascades[2].irradiance_rd }));
+		RD::Uniform t_visibility2(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 15, Vector<RID>({ p_sampler, ddgi_state.ddgi_cascades[2].visibility_rd }));
+		RD::Uniform t_metadata2(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 16, Vector<RID>({ p_sampler, ddgi_state.ddgi_cascades[2].metadata_rd }));
+		RD::Uniform t_irradiance3(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 17, Vector<RID>({ p_sampler, ddgi_state.ddgi_cascades[3].irradiance_rd }));
+		RD::Uniform t_visibility3(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 18, Vector<RID>({ p_sampler, ddgi_state.ddgi_cascades[3].visibility_rd }));
+		RD::Uniform t_metadata3(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 19, Vector<RID>({ p_sampler, ddgi_state.ddgi_cascades[3].metadata_rd }));
+		RD::Uniform t_params(RD::UNIFORM_TYPE_UNIFORM_BUFFER, 20, Vector<RID>({ ddgi_state.ddgi_trace_uniform_buffer[ddgi_frame_resource] }));
+		RD::Uniform t_sky(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 21, Vector<RID>({ sky_sampler, environment_radiance }));
+		RD::Uniform t_dynamic_volumes(RD::UNIFORM_TYPE_STORAGE_BUFFER, 22, Vector<RID>({ ddgi_state.ddgi_dynamic_volume_buffer }));
+		RD::Uniform t_dynamic_bvh(RD::UNIFORM_TYPE_STORAGE_BUFFER, 23, Vector<RID>({ ddgi_state.ddgi_dynamic_bvh_buffer }));
+		RD::Uniform t_dynamic_directory(RD::UNIFORM_TYPE_STORAGE_BUFFER, 24, Vector<RID>({ ddgi_state.ddgi_dynamic_directory_buffer }));
+		RD::Uniform t_dynamic_bricks(RD::UNIFORM_TYPE_STORAGE_BUFFER, 25, Vector<RID>({ ddgi_state.ddgi_dynamic_brick_buffer }));
+		RD::Uniform t_local_lights(RD::UNIFORM_TYPE_STORAGE_BUFFER, 26, Vector<RID>({ ddgi_state.ddgi_local_light_buffer }));
+		trace_set = UniformSetCacheRD::get_singleton()->get_cache(trace_shader_rid, 0, t_surfels, t_indices, t_records, t_counters, t_directory, t_bricks, t_color, t_shadow, t_irradiance0, t_visibility0, t_metadata0, t_irradiance1, t_visibility1, t_metadata1, t_irradiance2, t_visibility2, t_metadata2, t_irradiance3, t_visibility3, t_metadata3, t_params, t_sky, t_dynamic_volumes, t_dynamic_bvh, t_dynamic_directory, t_dynamic_bricks, t_local_lights);
+		ddgi_state.ddgi_cascades[lod].trace_shadow[ddgi_frame_resource] = p_shadow_atlas;
+		ddgi_state.ddgi_cascades[lod].trace_environment[ddgi_frame_resource] = environment_radiance;
+		ddgi_state.ddgi_cascades[lod].trace_sampler[ddgi_frame_resource] = p_sampler;
+		ddgi_state.ddgi_cascades[lod].trace_sky_sampler[ddgi_frame_resource] = sky_sampler;
+		ddgi_state.ddgi_cascades[lod].trace_color_grid[ddgi_frame_resource] = ddgi_state.reflection_color_grid_rd[color_lod];
 	}
 	const RID integrate_shader_rid = ddgi_integrate_shader.version_get_shader(ddgi_integrate_shader_version, 0);
 	RID &integrate_set = ddgi_state.ddgi_cascades[lod].integrate_uniform_set;
@@ -2139,8 +2163,7 @@ void RenderVoxelForward::_render_restir_gi(const RenderDataRD *p_render_data, RI
 	const Vector3 previous_camera_forward = -previous_camera_transform.basis.get_column(2).normalized();
 	const bool camera_cut = camera_transform.origin.distance_to(previous_camera_transform.origin) > camera_cut_distance ||
 			camera_forward.dot(previous_camera_forward) < Math::cos(Math::deg_to_rad(camera_cut_angle));
-	const bool light_changed = restir_frame_index > 0 && (restir_light_direction.dot(p_light_direction) < 0.9999f ||
-			!restir_light_color.is_equal_approx(p_light_color) || !Math::is_equal_approx(restir_light_energy, p_light_energy));
+	const bool light_changed = restir_frame_index > 0 && (restir_light_direction.dot(p_light_direction) < 0.9999f || !restir_light_color.is_equal_approx(p_light_color) || !Math::is_equal_approx(restir_light_energy, p_light_energy));
 	if (camera_cut || light_changed || global_invalidation) {
 		restir_history_valid = false;
 	}
@@ -2360,7 +2383,9 @@ void RenderVoxelForward::_update_ddgi_local_lights(const RenderDataRD *p_render_
 			const DdgiLocalLightCacheEntry *previous = ddgi_state.ddgi_local_light_cache.getptr(light_instance);
 			if (previous == nullptr || previous->version != cache.version || previous->transform != cache.transform) {
 				for (uint32_t lod = 0; lod < DDGI_LOD_COUNT; lod++) {
-					if (previous != nullptr) ddgi_state.ddgi_dynamic_dirty_bounds[lod].push_back(previous->influence_bounds);
+					if (previous != nullptr) {
+						ddgi_state.ddgi_dynamic_dirty_bounds[lod].push_back(previous->influence_bounds);
+					}
 					ddgi_state.ddgi_dynamic_dirty_bounds[lod].push_back(cache.influence_bounds);
 				}
 			}
@@ -2387,7 +2412,9 @@ void RenderVoxelForward::_update_ddgi_local_lights(const RenderDataRD *p_render_
 	const uint32_t required_capacity = MAX(ddgi_state.ddgi_local_light_count, 1u);
 	bool buffer_reallocated = false;
 	if (!ddgi_state.ddgi_local_light_buffer.is_valid() || ddgi_state.ddgi_local_light_buffer_capacity < required_capacity) {
-		if (ddgi_state.ddgi_local_light_buffer.is_valid()) RD::get_singleton()->free_rid(ddgi_state.ddgi_local_light_buffer);
+		if (ddgi_state.ddgi_local_light_buffer.is_valid()) {
+			RD::get_singleton()->free_rid(ddgi_state.ddgi_local_light_buffer);
+		}
 		ddgi_state.ddgi_local_light_buffer = RD::get_singleton()->storage_buffer_create(required_capacity * sizeof(DdgiLocalLightGpuData));
 		ddgi_state.ddgi_local_light_buffer_capacity = required_capacity;
 		RD::get_singleton()->set_resource_name(ddgi_state.ddgi_local_light_buffer, "Voxel DDGI Local Lights");
@@ -2418,7 +2445,9 @@ void RenderVoxelForward::_render_ddgi_gi_for_scene(const RenderDataRD *p_render_
 		RendererRD::LightStorage *light_storage = RendererRD::LightStorage::get_singleton();
 		for (uint32_t i = 0; i < p_render_data->lights->size(); i++) {
 			const RID light_instance = (*p_render_data->lights)[i];
-			if (light_storage->light_instance_get_type(light_instance) != RSE::LIGHT_DIRECTIONAL) continue;
+			if (light_storage->light_instance_get_type(light_instance) != RSE::LIGHT_DIRECTIONAL) {
+				continue;
+			}
 			light_direction = light_storage->light_instance_get_base_transform(light_instance).basis.xform(Vector3(0, 0, 1)).normalized();
 			const RID light = light_storage->light_instance_get_base_light(light_instance);
 			light_color = light_storage->light_get_color(light).srgb_to_linear();
@@ -2440,7 +2469,9 @@ void RenderVoxelForward::_render_ddgi_gi_for_scene(const RenderDataRD *p_render_
 		material_storage->global_shader_parameter_set_override(SNAME("voxel_forward_ddgi_resolve_ready"), false);
 		return;
 	}
-	if (shadow_valid) light_direction = ddgi_state.shadow_atlas_light_direction;
+	if (shadow_valid) {
+		light_direction = ddgi_state.shadow_atlas_light_direction;
+	}
 	const RID sampler = material_storage->sampler_rd_get_default(RSE::CANVAS_ITEM_TEXTURE_FILTER_NEAREST, RSE::CANVAS_ITEM_TEXTURE_REPEAT_DISABLED);
 	_render_indirect_light(p_render_data, shadow_texture, sampler, light_direction, light_color, light_energy);
 	_render_ddgi_resolve(p_render_data, sampler);
@@ -2954,7 +2985,7 @@ void RenderVoxelForward::_render_voxel_gi(const RenderDataRD *p_render_data, RID
 
 		if (indirect_blend_active[cascade]) {
 			// Finish publishing the immutable completed target. Newer camera/world
-			// definitions are picked up afterward instead of repeatedly cancelling
+			// definitions are picked up afterward instead of repeatedly canceling
 			// a blend that has already consumed generation work.
 			continue;
 		}
@@ -3888,7 +3919,9 @@ void RenderVoxelForward::_render_voxel_reflections(const RenderDataRD *p_render_
 		ddgi_state.reflection_resolve_cache_valid = false;
 		material_storage->global_shader_parameter_set_override(SNAME("voxel_forward_reflection"), ddgi_state.reflection_texture);
 	}
-	if (ddgi_context_changed) material_storage->global_shader_parameter_set_override(SNAME("voxel_forward_reflection"), ddgi_state.reflection_texture);
+	if (ddgi_context_changed) {
+		material_storage->global_shader_parameter_set_override(SNAME("voxel_forward_reflection"), ddgi_state.reflection_texture);
+	}
 	ddgi_state.reflection_screen_size = screen_size;
 
 	ReflectionUniformData reflection_data = {};
@@ -4193,7 +4226,6 @@ void RenderVoxelForward::_add_voxel_occupancy_uniforms(Vector<RD::Uniform> &r_un
 		}
 		r_uniforms.push_back(texture_array);
 	}
-
 }
 
 void RenderVoxelForward::_add_voxel_local_shadow_uniforms(LocalVector<RD::Uniform> &r_uniforms, bool p_multiview) {
@@ -4270,22 +4302,32 @@ void RenderVoxelForward::_render_scene(RenderDataRD *p_render_data, const Color 
 	if (p_render_data != nullptr && p_render_data->render_buffers.is_valid()) {
 		p_render_data->render_buffers->clear_voxel_sunlight_atlas();
 	}
- const RID scenario = p_render_data->scene_data->scenario;
- if (lighting_scenario != scenario) {
-  if (lighting_scenario.is_valid()) SWAP(ddgi_state, ddgi_worlds[lighting_scenario]);
-  if (ddgi_worlds.has(scenario)) SWAP(ddgi_state, ddgi_worlds[scenario]);
-  lighting_scenario = scenario;
-  volume_storage = volume_registry.get_scenario_storage(scenario);
-  ddgi_context_changed = true;
-  if (!ddgi_state.reflection_uniform_buffer.is_valid()) ddgi_state.reflection_uniform_buffer = RD::get_singleton()->uniform_buffer_create(sizeof(ReflectionUniformData));
-  for (uint32_t i = 0; i < DDGI_FRAME_RESOURCE_COUNT; i++) {
-   if (!ddgi_state.ddgi_resolve_uniform_buffer[i].is_valid()) ddgi_state.ddgi_resolve_uniform_buffer[i] = RD::get_singleton()->uniform_buffer_create(sizeof(DdgiResolveUniformData));
-   if (!ddgi_state.ddgi_temporal_uniform_buffer[i].is_valid()) ddgi_state.ddgi_temporal_uniform_buffer[i] = RD::get_singleton()->uniform_buffer_create(sizeof(DdgiTemporalUniformData));
-  }
-  // Legacy GI histories are not used by the DDGI bake path.
-  _free_indirect_light();
-  _free_restir_gi();
- }
+	const RID scenario = p_render_data->scene_data->scenario;
+	if (lighting_scenario != scenario) {
+		if (lighting_scenario.is_valid()) {
+			SWAP(ddgi_state, ddgi_worlds[lighting_scenario]);
+		}
+		if (ddgi_worlds.has(scenario)) {
+			SWAP(ddgi_state, ddgi_worlds[scenario]);
+		}
+		lighting_scenario = scenario;
+		volume_storage = volume_registry.get_scenario_storage(scenario);
+		ddgi_context_changed = true;
+		if (!ddgi_state.reflection_uniform_buffer.is_valid()) {
+			ddgi_state.reflection_uniform_buffer = RD::get_singleton()->uniform_buffer_create(sizeof(ReflectionUniformData));
+		}
+		for (uint32_t i = 0; i < DDGI_FRAME_RESOURCE_COUNT; i++) {
+			if (!ddgi_state.ddgi_resolve_uniform_buffer[i].is_valid()) {
+				ddgi_state.ddgi_resolve_uniform_buffer[i] = RD::get_singleton()->uniform_buffer_create(sizeof(DdgiResolveUniformData));
+			}
+			if (!ddgi_state.ddgi_temporal_uniform_buffer[i].is_valid()) {
+				ddgi_state.ddgi_temporal_uniform_buffer[i] = RD::get_singleton()->uniform_buffer_create(sizeof(DdgiTemporalUniformData));
+			}
+		}
+		// Legacy GI histories are not used by the DDGI bake path.
+		_free_indirect_light();
+		_free_restir_gi();
+	}
 
 	RendererRD::MaterialStorage *material_storage = RendererRD::MaterialStorage::get_singleton();
 	Color ambient_color = GLOBAL_GET("rendering/voxel_forward/ambient_light/color");
@@ -4391,7 +4433,7 @@ void RenderVoxelForward::_render_scene(RenderDataRD *p_render_data, const Color 
 	}
 
 	RenderForwardClustered::_render_scene(p_render_data, p_default_bg_color);
- ddgi_context_changed = false;
+	ddgi_context_changed = false;
 }
 
 void RenderVoxelForward::_render_shadow_atlas(const RenderDataRD *p_render_data) {
@@ -4530,7 +4572,9 @@ void RenderVoxelForward::_render_shadow_atlas(const RenderDataRD *p_render_data)
 		material_storage->global_shader_parameter_set_override(SNAME("voxel_forward_shadow_mask"), ddgi_state.shadow_mask_texture);
 	}
 
-	if (ddgi_context_changed) material_storage->global_shader_parameter_set_override(SNAME("voxel_forward_shadow_mask"), ddgi_state.shadow_mask_texture);
+	if (ddgi_context_changed) {
+		material_storage->global_shader_parameter_set_override(SNAME("voxel_forward_shadow_mask"), ddgi_state.shadow_mask_texture);
+	}
 	Vector3 reference_axis = Math::abs(light_direction.y) < 0.95f ? Vector3(0, 1, 0) : Vector3(1, 0, 0);
 	const Vector3 tangent = reference_axis.cross(light_direction).normalized();
 	const Vector3 bitangent = light_direction.cross(tangent).normalized();
@@ -4808,14 +4852,13 @@ void RenderVoxelForward::_render_shadow_atlas(const RenderDataRD *p_render_data)
 			}
 		}
 	} else if (atlas_invalid || force_full_rebuild_requested) {
-
 		// Snapping planar movement to the far-cascade texel grid makes the default
 		// near/far ratio an exact integer shift in both cascades. Axes that did not
 		// cross their hysteresis threshold retain their old coordinate, especially
 		// the depth axis whose movement changes the traced ray interval.
 		const Vector3 center_delta = requested_center - ddgi_state.shadow_atlas_center;
 		bool use_incremental = !force_full_rebuild_requested && ddgi_state.shadow_atlas_initialized && !source_invalid && !light_invalid && !layout_invalid && !incremental_mode_changed &&
-			(can_attempt_dirty_region_update || can_attempt_camera_scroll);
+				(can_attempt_dirty_region_update || can_attempt_camera_scroll);
 		String fallback_reason;
 		if (force_full_rebuild_requested) {
 			fallback_reason = "explicit full-rebuild request";

@@ -20,10 +20,22 @@ struct ProbeRecord {
 	uvec4 state_revision_frame_flags;
 };
 
-layout(set = 0, binding = 0, std430) readonly buffer Surfels { Surfel values[]; } surfels;
-layout(set = 0, binding = 1, std430) readonly buffer ProbeIndices { uint values[]; } probe_indices;
-layout(set = 0, binding = 2, std430) readonly buffer ProbeCounters { uint values[6]; } probe_counters;
-layout(set = 0, binding = 3, std430) buffer ProbeRecords { ProbeRecord values[]; } probe_records;
+layout(set = 0, binding = 0, std430) readonly buffer Surfels {
+	Surfel values[];
+}
+surfels;
+layout(set = 0, binding = 1, std430) readonly buffer ProbeIndices {
+	uint values[];
+}
+probe_indices;
+layout(set = 0, binding = 2, std430) readonly buffer ProbeCounters {
+	uint values[6];
+}
+probe_counters;
+layout(set = 0, binding = 3, std430) buffer ProbeRecords {
+	ProbeRecord values[];
+}
+probe_records;
 layout(rgba16f, set = 0, binding = 4) uniform restrict image2D irradiance_atlas;
 layout(rgba16f, set = 0, binding = 5) uniform restrict image2D depth_atlas;
 layout(rgba32f, set = 0, binding = 6) uniform restrict writeonly image2D probe_metadata;
@@ -38,7 +50,8 @@ layout(push_constant, std430) uniform Params {
 	vec4 temporal;
 	// Dirty irradiance hysteresis, dirty visibility hysteresis, reserved, reserved.
 	vec4 dirty_temporal;
-} params;
+}
+params;
 
 uint probe_generation(ivec4 logical_cell_lod) {
 	uvec4 bits = uvec4(logical_cell_lod);
@@ -60,7 +73,9 @@ const float PI = 3.14159265358979323846;
 vec3 oct_decode(vec2 encoded) {
 	vec2 f = encoded * 2.0 - 1.0;
 	vec3 direction = vec3(f.x, 1.0 - abs(f.x) - abs(f.y), f.y);
-	if (direction.y < 0.0) direction.xz = (1.0 - abs(direction.zx)) * sign(direction.xz);
+	if (direction.y < 0.0) {
+		direction.xz = (1.0 - abs(direction.zx)) * sign(direction.xz);
+	}
 	return normalize(direction);
 }
 
@@ -89,7 +104,9 @@ uint scheduled_probe_list_index(uint update_index) {
 	uint new_count = min(probe_counters.values[4], segment_size);
 	uint mature_count = min(probe_counters.values[5], segment_size);
 	uint dirty_updates = min(dirty_count, uint(params.scheduling.y));
-	if (update_index < dirty_updates) return (uint(params.update_state.w) + update_index) % max(dirty_count, 1u);
+	if (update_index < dirty_updates) {
+		return (uint(params.update_state.w) + update_index) % max(dirty_count, 1u);
+	}
 	uint camera_update_index = update_index - dirty_updates;
 	uint new_updates = min(new_count, uint(params.scheduling.z));
 	if (camera_update_index < new_updates) {
@@ -113,21 +130,39 @@ uint scheduled_probe_count() {
 
 ivec2 oct_border_source(ivec2 texel, int interior_size) {
 	int last = interior_size + 1;
-	if (texel.x == 0 && texel.y == 0) return ivec2(interior_size, interior_size);
-	if (texel.x == last && texel.y == 0) return ivec2(1, interior_size);
-	if (texel.x == 0 && texel.y == last) return ivec2(interior_size, 1);
-	if (texel.x == last && texel.y == last) return ivec2(1, 1);
-	if (texel.y == 0) return ivec2(interior_size - texel.x + 1, 1);
-	if (texel.y == last) return ivec2(interior_size - texel.x + 1, interior_size);
-	if (texel.x == 0) return ivec2(1, interior_size - texel.y + 1);
-	if (texel.x == last) return ivec2(interior_size, interior_size - texel.y + 1);
+	if (texel.x == 0 && texel.y == 0) {
+		return ivec2(interior_size, interior_size);
+	}
+	if (texel.x == last && texel.y == 0) {
+		return ivec2(1, interior_size);
+	}
+	if (texel.x == 0 && texel.y == last) {
+		return ivec2(interior_size, 1);
+	}
+	if (texel.x == last && texel.y == last) {
+		return ivec2(1, 1);
+	}
+	if (texel.y == 0) {
+		return ivec2(interior_size - texel.x + 1, 1);
+	}
+	if (texel.y == last) {
+		return ivec2(interior_size - texel.x + 1, interior_size);
+	}
+	if (texel.x == 0) {
+		return ivec2(1, interior_size - texel.y + 1);
+	}
+	if (texel.x == last) {
+		return ivec2(interior_size, interior_size - texel.y + 1);
+	}
 	return texel;
 }
 
 void main() {
 	uint update_index = gl_WorkGroupID.z;
 	uint update_count = scheduled_probe_count();
-	if (update_index >= update_count) return;
+	if (update_index >= update_count) {
+		return;
+	}
 	uint probe_index = probe_indices.values[scheduled_probe_list_index(update_index)];
 	ProbeRecord record = probe_records.values[probe_index];
 	uint row_width = uint(params.probe_grid.x * params.probe_grid.x);
@@ -142,7 +177,9 @@ void main() {
 	uint ray_count = converging_probe ? uint(params.update_state.y) : uint(params.update_state.x);
 	uint convergence_updates = uint(max(params.dirty_temporal.z, 1.0));
 	uint lane = gl_LocalInvocationIndex;
-	for (uint ray = lane; ray < ray_count; ray += 64u) probe_surfels[ray] = surfels.values[update_index * ray_stride + ray];
+	for (uint ray = lane; ray < ray_count; ray += 64u) {
+		probe_surfels[ray] = surfels.values[update_index * ray_stride + ray];
+	}
 	barrier();
 
 	float confidence_step = 1.0 / float(convergence_updates);
@@ -207,7 +244,9 @@ void main() {
 				// A query owned by this cage cannot lie beyond its enlarged diagonal.
 				// Rejecting farther samples prevents a nearly parallel ray from
 				// smearing an extreme depth into adjacent octahedral texels.
-				if (distance > maximum_useful_depth) continue;
+				if (distance > maximum_useful_depth) {
+					continue;
+				}
 				mean_sum += distance * weight;
 				second_sum += distance * distance * weight;
 				weight_sum += weight;
@@ -257,7 +296,9 @@ void main() {
 	if (lane == 0u) {
 		if (retiring_probe) {
 			record.state_revision_frame_flags.x = update_sequence >= convergence_updates ? 0u : 8u;
-			if (record.state_revision_frame_flags.x == 0u) record.physical_position_valid.w = 0.0;
+			if (record.state_revision_frame_flags.x == 0u) {
+				record.physical_position_valid.w = 0.0;
+			}
 		} else if (converging_probe && update_sequence >= convergence_updates) {
 			bool awake = state == 2u || state == 6u;
 			record.state_revision_frame_flags.x = awake ? 4u : 5u;

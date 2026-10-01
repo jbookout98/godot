@@ -1,3 +1,33 @@
+/**************************************************************************/
+/*  voxel_shape_data.cpp                                                  */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
+
 #include "voxel_shape_data.h"
 
 #include "core/error/error_macros.h"
@@ -504,9 +534,15 @@ int VoxelShapeData::fill_voxel_region(const Vector3i &p_position, const Vector3i
 	return changed;
 }
 
-uint64_t VoxelShapeData::get_revision() const { return revision; }
-Vector3i VoxelShapeData::get_last_dirty_position() const { return dirty_min; }
-Vector3i VoxelShapeData::get_last_dirty_size() const { return dirty_max - dirty_min + Vector3i(1, 1, 1); }
+uint64_t VoxelShapeData::get_revision() const {
+	return revision;
+}
+Vector3i VoxelShapeData::get_last_dirty_position() const {
+	return dirty_min;
+}
+Vector3i VoxelShapeData::get_last_dirty_size() const {
+	return dirty_max - dirty_min + Vector3i(1, 1, 1);
+}
 
 void VoxelShapeData::set_dimensions(const Vector3i &p_dimensions) {
 	ERR_FAIL_COND_MSG(p_dimensions.x <= 0 || p_dimensions.y <= 0 || p_dimensions.z <= 0, "VoxelShapeData dimensions must be positive.");
@@ -519,7 +555,9 @@ void VoxelShapeData::set_dimensions(const Vector3i &p_dimensions) {
 	_flush_edits();
 }
 
-Vector3i VoxelShapeData::get_dimensions() const { return dimensions; }
+Vector3i VoxelShapeData::get_dimensions() const {
+	return dimensions;
+}
 
 void VoxelShapeData::set_voxel_size(real_t p_voxel_size) {
 	ERR_FAIL_COND_MSG(p_voxel_size <= 0.0, "VoxelShapeData voxel_size must be greater than zero.");
@@ -530,7 +568,9 @@ void VoxelShapeData::set_voxel_size(real_t p_voxel_size) {
 	emit_changed();
 }
 
-real_t VoxelShapeData::get_voxel_size() const { return voxel_size; }
+real_t VoxelShapeData::get_voxel_size() const {
+	return voxel_size;
+}
 
 void VoxelShapeData::set_solid_voxels(const PackedByteArray &p_voxels) {
 	ERR_FAIL_COND_MSG(!_validate_binary_array(p_voxels), "solid_voxels must match dimensions and contain only 0 or 1.");
@@ -556,7 +596,9 @@ void VoxelShapeData::set_voxel_data(const PackedByteArray &p_voxels) {
 	_flush_edits();
 }
 
-PackedByteArray VoxelShapeData::get_voxel_data() const { return brick_storage.export_dense(); }
+PackedByteArray VoxelShapeData::get_voxel_data() const {
+	return brick_storage.export_dense();
+}
 
 void VoxelShapeData::set_sparse_brick_data(const PackedByteArray &p_data) {
 	if (p_data.is_empty()) {
@@ -568,29 +610,42 @@ void VoxelShapeData::set_sparse_brick_data(const PackedByteArray &p_data) {
 	_flush_edits();
 }
 
-PackedByteArray VoxelShapeData::get_sparse_brick_data() const { return brick_storage.serialize_sparse(); }
+PackedByteArray VoxelShapeData::get_sparse_brick_data() const {
+	return brick_storage.serialize_sparse();
+}
 
 void VoxelShapeData::set_palette_texture(const Ref<Texture2D> &p_texture) {
-	if (palette_texture == p_texture) return;
+	if (palette_texture == p_texture) {
+		return;
+	}
 	palette_texture = p_texture;
 	emit_changed();
 }
-Ref<Texture2D> VoxelShapeData::get_palette_texture() const { return palette_texture; }
+Ref<Texture2D> VoxelShapeData::get_palette_texture() const {
+	return palette_texture;
+}
 
 void VoxelShapeData::set_material_texture(const Ref<Texture2D> &p_texture) {
-	if (material_texture == p_texture) return;
+	if (material_texture == p_texture) {
+		return;
+	}
 	material_texture = p_texture;
 	emit_changed();
 }
-Ref<Texture2D> VoxelShapeData::get_material_texture() const { return material_texture; }
+Ref<Texture2D> VoxelShapeData::get_material_texture() const {
+	return material_texture;
+}
 
 #define VOXEL_TEXTURE_ACCESSORS(name) \
 	void VoxelShapeData::set_##name##_texture(const Ref<Texture2D> &p_texture) { \
-		if (name##_texture == p_texture) return; \
+		if (name##_texture == p_texture) \
+			return; \
 		name##_texture = p_texture; \
 		emit_changed(); \
 	} \
-	Ref<Texture2D> VoxelShapeData::get_##name##_texture() const { return name##_texture; }
+	Ref<Texture2D> VoxelShapeData::get_##name##_texture() const { \
+		return name##_texture; \
+	}
 
 VOXEL_TEXTURE_ACCESSORS(metallic)
 VOXEL_TEXTURE_ACCESSORS(transparency)
@@ -599,76 +654,223 @@ VOXEL_TEXTURE_ACCESSORS(emission)
 
 #undef VOXEL_TEXTURE_ACCESSORS
 
-void VoxelShapeData::set_face_voxels(const PackedByteArray &p_voxels) { ERR_FAIL_COND_MSG(!_validate_binary_array(p_voxels), "face_voxels must match dimensions and contain only 0 or 1."); }
-PackedByteArray VoxelShapeData::get_face_voxels() const { PackedByteArray result; _build_topology_array(1, false, result); return result; }
-void VoxelShapeData::set_edge_voxels(const PackedByteArray &p_voxels) { ERR_FAIL_COND_MSG(!_validate_binary_array(p_voxels), "edge_voxels must match dimensions and contain only 0 or 1."); }
-PackedByteArray VoxelShapeData::get_edge_voxels() const { PackedByteArray result; _build_topology_array(2, false, result); return result; }
-void VoxelShapeData::set_corner_voxels(const PackedByteArray &p_voxels) { ERR_FAIL_COND_MSG(!_validate_binary_array(p_voxels), "corner_voxels must match dimensions and contain only 0 or 1."); }
-PackedByteArray VoxelShapeData::get_corner_voxels() const { PackedByteArray result; _build_topology_array(3, false, result); return result; }
+void VoxelShapeData::set_face_voxels(const PackedByteArray &p_voxels) {
+	ERR_FAIL_COND_MSG(!_validate_binary_array(p_voxels), "face_voxels must match dimensions and contain only 0 or 1.");
+}
+PackedByteArray VoxelShapeData::get_face_voxels() const {
+	PackedByteArray result;
+	_build_topology_array(1, false, result);
+	return result;
+}
+void VoxelShapeData::set_edge_voxels(const PackedByteArray &p_voxels) {
+	ERR_FAIL_COND_MSG(!_validate_binary_array(p_voxels), "edge_voxels must match dimensions and contain only 0 or 1.");
+}
+PackedByteArray VoxelShapeData::get_edge_voxels() const {
+	PackedByteArray result;
+	_build_topology_array(2, false, result);
+	return result;
+}
+void VoxelShapeData::set_corner_voxels(const PackedByteArray &p_voxels) {
+	ERR_FAIL_COND_MSG(!_validate_binary_array(p_voxels), "corner_voxels must match dimensions and contain only 0 or 1.");
+}
+PackedByteArray VoxelShapeData::get_corner_voxels() const {
+	PackedByteArray result;
+	_build_topology_array(3, false, result);
+	return result;
+}
 
-void VoxelShapeData::set_face_masks(const PackedByteArray &p_masks) { ERR_FAIL_COND_MSG(p_masks.size() != _get_expected_voxel_count(), "face_masks must match dimensions."); }
-PackedByteArray VoxelShapeData::get_face_masks() const { PackedByteArray result; _build_topology_array(1, true, result); return result; }
-void VoxelShapeData::set_edge_masks(const PackedByteArray &p_masks) { ERR_FAIL_COND_MSG(p_masks.size() != _get_expected_voxel_count(), "edge_masks must match dimensions."); }
-PackedByteArray VoxelShapeData::get_edge_masks() const { PackedByteArray result; _build_topology_array(2, true, result); return result; }
-void VoxelShapeData::set_corner_masks(const PackedByteArray &p_masks) { ERR_FAIL_COND_MSG(p_masks.size() != _get_expected_voxel_count(), "corner_masks must match dimensions."); }
-PackedByteArray VoxelShapeData::get_corner_masks() const { PackedByteArray result; _build_topology_array(3, true, result); return result; }
-uint8_t VoxelShapeData::get_face_mask(const Vector3i &p_position) const { uint8_t mask = 0; return _get_surface_class(p_position, &mask) == 1 ? mask : 0; }
-uint8_t VoxelShapeData::get_edge_mask(const Vector3i &p_position) const { uint8_t mask = 0; return _get_surface_class(p_position, &mask) == 2 ? mask : 0; }
-uint8_t VoxelShapeData::get_corner_mask(const Vector3i &p_position) const { uint8_t mask = 0; return _get_surface_class(p_position, &mask) == 3 ? mask : 0; }
+void VoxelShapeData::set_face_masks(const PackedByteArray &p_masks) {
+	ERR_FAIL_COND_MSG(p_masks.size() != _get_expected_voxel_count(), "face_masks must match dimensions.");
+}
+PackedByteArray VoxelShapeData::get_face_masks() const {
+	PackedByteArray result;
+	_build_topology_array(1, true, result);
+	return result;
+}
+void VoxelShapeData::set_edge_masks(const PackedByteArray &p_masks) {
+	ERR_FAIL_COND_MSG(p_masks.size() != _get_expected_voxel_count(), "edge_masks must match dimensions.");
+}
+PackedByteArray VoxelShapeData::get_edge_masks() const {
+	PackedByteArray result;
+	_build_topology_array(2, true, result);
+	return result;
+}
+void VoxelShapeData::set_corner_masks(const PackedByteArray &p_masks) {
+	ERR_FAIL_COND_MSG(p_masks.size() != _get_expected_voxel_count(), "corner_masks must match dimensions.");
+}
+PackedByteArray VoxelShapeData::get_corner_masks() const {
+	PackedByteArray result;
+	_build_topology_array(3, true, result);
+	return result;
+}
+uint8_t VoxelShapeData::get_face_mask(const Vector3i &p_position) const {
+	uint8_t mask = 0;
+	return _get_surface_class(p_position, &mask) == 1 ? mask : 0;
+}
+uint8_t VoxelShapeData::get_edge_mask(const Vector3i &p_position) const {
+	uint8_t mask = 0;
+	return _get_surface_class(p_position, &mask) == 2 ? mask : 0;
+}
+uint8_t VoxelShapeData::get_corner_mask(const Vector3i &p_position) const {
+	uint8_t mask = 0;
+	return _get_surface_class(p_position, &mask) == 3 ? mask : 0;
+}
 
 void VoxelShapeData::set_face_shape(const Ref<Shape3D> &p_shape) {
-	if (face_shape == p_shape) return;
-	if (face_shape.is_valid()) face_shape->disconnect_changed(callable_mp(this, &VoxelShapeData::_face_shape_changed));
+	if (face_shape == p_shape) {
+		return;
+	}
+	if (face_shape.is_valid()) {
+		face_shape->disconnect_changed(callable_mp(this, &VoxelShapeData::_face_shape_changed));
+	}
 	face_shape = p_shape;
-	if (face_shape.is_valid()) face_shape->connect_changed(callable_mp(this, &VoxelShapeData::_face_shape_changed));
+	if (face_shape.is_valid()) {
+		face_shape->connect_changed(callable_mp(this, &VoxelShapeData::_face_shape_changed));
+	}
 	emit_changed();
 }
-Ref<Shape3D> VoxelShapeData::get_face_shape() const { return face_shape; }
+Ref<Shape3D> VoxelShapeData::get_face_shape() const {
+	return face_shape;
+}
 void VoxelShapeData::set_edge_shape(const Ref<Shape3D> &p_shape) {
-	if (edge_shape == p_shape) return;
-	if (edge_shape.is_valid()) edge_shape->disconnect_changed(callable_mp(this, &VoxelShapeData::_edge_shape_changed));
+	if (edge_shape == p_shape) {
+		return;
+	}
+	if (edge_shape.is_valid()) {
+		edge_shape->disconnect_changed(callable_mp(this, &VoxelShapeData::_edge_shape_changed));
+	}
 	edge_shape = p_shape;
-	if (edge_shape.is_valid()) edge_shape->connect_changed(callable_mp(this, &VoxelShapeData::_edge_shape_changed));
+	if (edge_shape.is_valid()) {
+		edge_shape->connect_changed(callable_mp(this, &VoxelShapeData::_edge_shape_changed));
+	}
 	emit_changed();
 }
-Ref<Shape3D> VoxelShapeData::get_edge_shape() const { return edge_shape; }
+Ref<Shape3D> VoxelShapeData::get_edge_shape() const {
+	return edge_shape;
+}
 void VoxelShapeData::set_corner_shape(const Ref<Shape3D> &p_shape) {
-	if (corner_shape == p_shape) return;
-	if (corner_shape.is_valid()) corner_shape->disconnect_changed(callable_mp(this, &VoxelShapeData::_corner_shape_changed));
+	if (corner_shape == p_shape) {
+		return;
+	}
+	if (corner_shape.is_valid()) {
+		corner_shape->disconnect_changed(callable_mp(this, &VoxelShapeData::_corner_shape_changed));
+	}
 	corner_shape = p_shape;
-	if (corner_shape.is_valid()) corner_shape->connect_changed(callable_mp(this, &VoxelShapeData::_corner_shape_changed));
+	if (corner_shape.is_valid()) {
+		corner_shape->connect_changed(callable_mp(this, &VoxelShapeData::_corner_shape_changed));
+	}
 	emit_changed();
 }
-Ref<Shape3D> VoxelShapeData::get_corner_shape() const { return corner_shape; }
-void VoxelShapeData::_face_shape_changed() { emit_changed(); }
-void VoxelShapeData::_edge_shape_changed() { emit_changed(); }
-void VoxelShapeData::_corner_shape_changed() { emit_changed(); }
+Ref<Shape3D> VoxelShapeData::get_corner_shape() const {
+	return corner_shape;
+}
+void VoxelShapeData::_face_shape_changed() {
+	emit_changed();
+}
+void VoxelShapeData::_edge_shape_changed() {
+	emit_changed();
+}
+void VoxelShapeData::_corner_shape_changed() {
+	emit_changed();
+}
 
-bool VoxelShapeData::is_inside(const Vector3i &p_position) const { return brick_storage.is_inside(p_position); }
+bool VoxelShapeData::is_inside(const Vector3i &p_position) const {
+	return brick_storage.is_inside(p_position);
+}
 int VoxelShapeData::get_voxel_index(const Vector3i &p_position) const {
 	ERR_FAIL_COND_V_MSG(!is_inside(p_position), -1, "Voxel position is outside VoxelShapeData dimensions.");
 	return p_position.x + p_position.y * dimensions.x + p_position.z * dimensions.x * dimensions.y;
 }
-bool VoxelShapeData::is_solid(const Vector3i &p_position) const { return brick_storage.get_voxel(p_position) != 0; }
-bool VoxelShapeData::is_face(const Vector3i &p_position) const { return _get_surface_class(p_position) == 1; }
-bool VoxelShapeData::is_edge(const Vector3i &p_position) const { return _get_surface_class(p_position) == 2; }
-bool VoxelShapeData::is_corner(const Vector3i &p_position) const { return _get_surface_class(p_position) == 3; }
+bool VoxelShapeData::is_solid(const Vector3i &p_position) const {
+	return brick_storage.get_voxel(p_position) != 0;
+}
+bool VoxelShapeData::is_face(const Vector3i &p_position) const {
+	return _get_surface_class(p_position) == 1;
+}
+bool VoxelShapeData::is_edge(const Vector3i &p_position) const {
+	return _get_surface_class(p_position) == 2;
+}
+bool VoxelShapeData::is_corner(const Vector3i &p_position) const {
+	return _get_surface_class(p_position) == 3;
+}
 
 void VoxelShapeData::set_face_shape_scale(const Vector3 &p_scale) {
 	ERR_FAIL_COND_MSG(p_scale.x <= 0.0 || p_scale.y <= 0.0 || p_scale.z <= 0.0, "face_shape_scale components must be positive.");
-	if (face_shape_scale == p_scale) return;
-	face_shape_scale = p_scale; emit_changed();
+	if (face_shape_scale == p_scale) {
+		return;
+	}
+	face_shape_scale = p_scale;
+	emit_changed();
 }
-Vector3 VoxelShapeData::get_face_shape_scale() const { return face_shape_scale; }
+Vector3 VoxelShapeData::get_face_shape_scale() const {
+	return face_shape_scale;
+}
 void VoxelShapeData::set_edge_shape_scale(const Vector3 &p_scale) {
 	ERR_FAIL_COND_MSG(p_scale.x <= 0.0 || p_scale.y <= 0.0 || p_scale.z <= 0.0, "edge_shape_scale components must be positive.");
-	if (edge_shape_scale == p_scale) return;
-	edge_shape_scale = p_scale; emit_changed();
+	if (edge_shape_scale == p_scale) {
+		return;
+	}
+	edge_shape_scale = p_scale;
+	emit_changed();
 }
-Vector3 VoxelShapeData::get_edge_shape_scale() const { return edge_shape_scale; }
+Vector3 VoxelShapeData::get_edge_shape_scale() const {
+	return edge_shape_scale;
+}
 void VoxelShapeData::set_corner_shape_scale(const Vector3 &p_scale) {
 	ERR_FAIL_COND_MSG(p_scale.x <= 0.0 || p_scale.y <= 0.0 || p_scale.z <= 0.0, "corner_shape_scale components must be positive.");
-	if (corner_shape_scale == p_scale) return;
-	corner_shape_scale = p_scale; emit_changed();
+	if (corner_shape_scale == p_scale) {
+		return;
+	}
+	corner_shape_scale = p_scale;
+	emit_changed();
 }
-Vector3 VoxelShapeData::get_corner_shape_scale() const { return corner_shape_scale; }
+Vector3 VoxelShapeData::get_corner_shape_scale() const {
+	return corner_shape_scale;
+}
+
+const VoxelShapeData::OccupancyData &VoxelShapeData::get_occupancy_data() const {
+	if (occupancy_revision == brick_storage.get_revision()) {
+		return occupancy_data;
+	}
+	// Build once per storage revision, including edits inside an open edit batch.
+	// Start fresh so old render-thread snapshots cannot be modified in place.
+	occupancy_data = OccupancyData();
+	const VoxelBrickStorage &storage = brick_storage;
+	occupancy_data.directory.resize(storage.get_brick_count() * sizeof(uint32_t));
+	occupancy_data.directory.fill(0);
+	int mixed_brick_count = 0;
+	for (int brick_index = 0; brick_index < storage.get_brick_count(); brick_index++) {
+		if (storage.get_brick(brick_index).type == VoxelBrickStorage::BRICK_MIXED) {
+			mixed_brick_count++;
+		}
+	}
+	occupancy_data.bricks.resize(mixed_brick_count * (VoxelBrickStorage::BRICK_VOXEL_COUNT / 8));
+	occupancy_data.bricks.fill(0);
+	uint8_t *directory_write = occupancy_data.directory.ptrw();
+	uint8_t *brick_write = occupancy_data.bricks.ptrw();
+	int mixed_slot = 0;
+	for (int brick_index = 0; brick_index < storage.get_brick_count(); brick_index++) {
+		const VoxelBrickStorage::Brick &brick = storage.get_brick(brick_index);
+		uint32_t directory_code = 0;
+		if (brick.type == VoxelBrickStorage::BRICK_UNIFORM && brick.uniform_value != 0) {
+			directory_code = 1;
+		} else if (brick.type == VoxelBrickStorage::BRICK_MIXED) {
+			directory_code = uint32_t(mixed_slot + 2);
+			const uint8_t *mixed_values = storage.get_brick_mixed_values(brick_index);
+			uint8_t *mixed_write = brick_write + mixed_slot * (VoxelBrickStorage::BRICK_VOXEL_COUNT / 8);
+			for (int local_index = 0; local_index < VoxelBrickStorage::BRICK_VOXEL_COUNT; local_index++) {
+				if (mixed_values[local_index] != 0) {
+					mixed_write[local_index >> 3] |= uint8_t(1u << (local_index & 7));
+				}
+			}
+			mixed_slot++;
+		}
+		occupancy_data.occupied_brick_count += directory_code != 0 ? 1 : 0;
+		directory_write[brick_index * 4 + 0] = uint8_t(directory_code & 0xFF);
+		directory_write[brick_index * 4 + 1] = uint8_t((directory_code >> 8) & 0xFF);
+		directory_write[brick_index * 4 + 2] = uint8_t((directory_code >> 16) & 0xFF);
+		directory_write[brick_index * 4 + 3] = uint8_t((directory_code >> 24) & 0xFF);
+	}
+	occupancy_revision = brick_storage.get_revision();
+	return occupancy_data;
+}
